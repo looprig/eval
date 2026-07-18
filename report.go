@@ -1,6 +1,23 @@
 package eval
 
-import "time"
+import (
+	"context"
+	"time"
+)
+
+// Sink is the destination contract for a completed Report. It is the core
+// reporting seam: the runner (or a continuous-eval loop) hands each Report to a
+// Sink, and a Sink persists, forwards, or exports it. Implementations live
+// outside the root package (a JSON file sink, an OpenTelemetry sink, an
+// in-memory sink) so the root never depends on a storage or wire technology.
+// WriteReport takes a context so a slow or networked sink is cancellable, and
+// returns a typed error the caller can classify. A Sink must treat the Report as
+// untrusted-adjacent: it must not place raw conversation text, judge
+// explanations, or secrets in any external label — redaction is the wire form's
+// responsibility, enforced by the concrete sink.
+type Sink interface {
+	WriteReport(context.Context, Report) error
+}
 
 // This file declares the output of the execution engine: Report and its parts.
 // A Report is a plain, ordered data record — it performs no work. It retains the
