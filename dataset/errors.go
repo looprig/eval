@@ -24,6 +24,7 @@ const (
 	reasonEmptyScenario  = "missing scenario payload"
 	reasonUnknownRole    = "unknown message role"
 	reasonInvalidMessage = "invalid conversation message"
+	reasonUnknownField   = "unknown field"
 )
 
 // locPrefix renders the safe "line N: " diagnostic prefix, or "" when no line

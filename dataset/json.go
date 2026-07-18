@@ -101,9 +101,22 @@ func decodeRecord(data []byte) (eval.Scenario, error) {
 // decodeScenario decodes the deferred scenario payload into a strict
 // eval.Scenario, reconstructing the conversation via role discrimination.
 func decodeScenario(data json.RawMessage) (eval.Scenario, error) {
+	// Strict at the scenario-object boundary: reject unknown scenario-level
+	// fields, matching the report codec's payload strictness. This applies ONLY
+	// to the scenario object and its directly-decoded domain fields; the message
+	// objects in Input are json.RawMessage, so each still decodes through
+	// core/content's own UnmarshalJSON (below), untouched by this strictness.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
 	var w scenarioJSON
-	if err := json.Unmarshal(data, &w); err != nil {
+	if err := dec.Decode(&w); err != nil {
+		if isUnknownField(err) {
+			return eval.Scenario{}, &MalformedRecordError{Reason: reasonUnknownField}
+		}
 		return eval.Scenario{}, &MalformedRecordError{Reason: reasonInvalidJSON}
+	}
+	if dec.More() {
+		return eval.Scenario{}, &MalformedRecordError{Reason: reasonTrailingData}
 	}
 
 	var input content.AgenticMessages
@@ -214,6 +227,14 @@ func encodeScenario(sc eval.Scenario) (json.RawMessage, error) {
 		Expectation: sc.Expectation,
 		Labels:      sc.Labels,
 	})
+}
+
+// isUnknownField reports whether a json decode error was an unknown-field
+// rejection from DisallowUnknownFields. encoding/json signals this only via the
+// error string, so this is the one place a string match is unavoidable; it
+// classifies the codec's OWN decoder output, never untrusted content.
+func isUnknownField(err error) bool {
+	return err != nil && bytes.Contains([]byte(err.Error()), []byte("unknown field"))
 }
 
 // safeVersionToken returns a bounded, safe rendering of an unknown version token

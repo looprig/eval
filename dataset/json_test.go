@@ -234,6 +234,14 @@ func TestDecodeRecordErrors(t *testing.T) {
 			input:  []byte(`{"version":"dataset/v1","scenario":{"id":"x","name":"n","revision":"r","input":[{"role":"robot","blocks":[]}]}}`),
 			target: new(dataset.MalformedRecordError),
 		},
+		{
+			// An unknown SCENARIO-level field is rejected at the boundary
+			// (DisallowUnknownFields), symmetric with the report codec. The
+			// message payload is otherwise valid, so only the extra field fails.
+			name:   "unknown scenario field",
+			input:  []byte(`{"version":"dataset/v1","scenario":{"id":"x","name":"n","revision":"r","input":[{"role":"user","blocks":[{"type":"text","Text":"hi"}]}],"bogus":1}}`),
+			target: new(dataset.MalformedRecordError),
+		},
 	}
 
 	for _, tt := range tests {

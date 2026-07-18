@@ -230,6 +230,56 @@ func TestDeterministicOrdering(t *testing.T) {
 	}
 }
 
+func TestEncodeTotalOrderTiebreak(t *testing.T) {
+	t.Parallel()
+
+	// Two assessments in ONE sample share the same (Evaluator, Revision) but
+	// differ in status and measurements. Without a total-order tiebreaker their
+	// relative order would depend on input order, breaking byte-stability.
+	build := func(swap bool) eval.Report {
+		a1 := eval.Assessment{
+			Evaluator: eval.Name("dup"), Revision: eval.Revision("1"),
+			Status:       eval.StatusPass,
+			Measurements: []eval.Measurement{measure("score", 1, eval.UnitRatio)},
+		}
+		a2 := eval.Assessment{
+			Evaluator: eval.Name("dup"), Revision: eval.Revision("1"),
+			Status:       eval.StatusFail,
+			Measurements: []eval.Measurement{measure("score", 0, eval.UnitRatio)},
+		}
+		as := []eval.Assessment{a1, a2}
+		if swap {
+			as = []eval.Assessment{a2, a1}
+		}
+		r := baseReport()
+		r.Samples[0].Assessments = as
+		r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusPass: 1, eval.StatusFail: 1}
+		return r
+	}
+
+	forward, err := reportjson.Encode(build(false))
+	if err != nil {
+		t.Fatalf("Encode forward: %v", err)
+	}
+	// Repeated encode of the same input is byte-identical.
+	again, err := reportjson.Encode(build(false))
+	if err != nil {
+		t.Fatalf("Encode again: %v", err)
+	}
+	if !bytes.Equal(forward, again) {
+		t.Fatalf("repeated encode not byte-identical:\n first=%s\n second=%s", forward, again)
+	}
+	// A shuffled input order encodes to identical bytes: the collision on
+	// (Evaluator, Revision) is broken deterministically by content.
+	shuffled, err := reportjson.Encode(build(true))
+	if err != nil {
+		t.Fatalf("Encode shuffled: %v", err)
+	}
+	if !bytes.Equal(forward, shuffled) {
+		t.Fatalf("encoding depends on input order:\n forward=%s\n shuffled=%s", forward, shuffled)
+	}
+}
+
 func TestRedaction(t *testing.T) {
 	t.Parallel()
 
@@ -261,6 +311,14 @@ func TestRedaction(t *testing.T) {
 	for _, canary := range []string{convCanary, findingCanary, causeCanary} {
 		if bytes.Contains(enc, []byte(canary)) {
 			t.Fatalf("canary %q leaked into wire form:\n%s", canary, enc)
+		}
+	}
+	// The SAFE fields MUST survive, so this canary test cannot pass on a blank
+	// or near-empty encoding. Scenario identities, the finding code, and the
+	// assessment status are all safe and expected on the wire.
+	for _, want := range []string{`"s1"`, `"s2"`, `"relevance"`, `"fail"`} {
+		if !bytes.Contains(enc, []byte(want)) {
+			t.Fatalf("expected safe field %q missing from wire form:\n%s", want, enc)
 		}
 	}
 }

@@ -183,6 +183,45 @@ func Encode(r eval.Report) ([]byte, error) {
 	return out, nil
 }
 
+// canonicalSort sorts s in place by the supplied primary less function and
+// breaks EVERY tie on the element's canonical JSON encoding, so a collision on
+// the primary key orders deterministically by content instead of by input
+// position. This gives each encoder sort a total order — the byte-stability
+// invariant holds even when two elements share a primary key (e.g. two
+// assessments with the same Evaluator+Revision). Elements are already internally
+// canonicalized before this runs, so their encodings are stable; a marshal
+// failure (unreachable for the wire structs) surfaces as an EncodeError.
+func canonicalSort[T any](s []T, less func(a, b T) bool) error {
+	keys := make([]string, len(s))
+	for i := range s {
+		b, err := json.Marshal(s[i])
+		if err != nil {
+			return &EncodeError{Cause: err}
+		}
+		keys[i] = string(b)
+	}
+	idx := make([]int, len(s))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.Slice(idx, func(a, b int) bool {
+		ia, ib := idx[a], idx[b]
+		if less(s[ia], s[ib]) {
+			return true
+		}
+		if less(s[ib], s[ia]) {
+			return false
+		}
+		return keys[ia] < keys[ib]
+	})
+	ordered := make([]T, len(s))
+	for i, j := range idx {
+		ordered[i] = s[j]
+	}
+	copy(s, ordered)
+	return nil
+}
+
 // projectReport builds the redacted, canonically ordered wire projection of a
 // report. It is the single place raw content is dropped.
 func projectReport(r eval.Report) (reportJSON, error) {
@@ -194,12 +233,14 @@ func projectReport(r eval.Report) (reportJSON, error) {
 		}
 		samples[i] = s
 	}
-	sort.Slice(samples, func(i, j int) bool {
-		if samples[i].ScenarioID != samples[j].ScenarioID {
-			return samples[i].ScenarioID < samples[j].ScenarioID
+	if err := canonicalSort(samples, func(a, b sampleJSON) bool {
+		if a.ScenarioID != b.ScenarioID {
+			return a.ScenarioID < b.ScenarioID
 		}
-		return samples[i].TrialIndex < samples[j].TrialIndex
-	})
+		return a.TrialIndex < b.TrialIndex
+	}); err != nil {
+		return reportJSON{}, err
+	}
 
 	return reportJSON{
 		ID:         r.ID,
@@ -227,12 +268,14 @@ func projectSample(s eval.SampleReport) (sampleJSON, error) {
 		}
 		as[i] = a
 	}
-	sort.Slice(as, func(i, j int) bool {
-		if as[i].Evaluator != as[j].Evaluator {
-			return as[i].Evaluator < as[j].Evaluator
+	if err := canonicalSort(as, func(a, b assessmentJSON) bool {
+		if a.Evaluator != b.Evaluator {
+			return a.Evaluator < b.Evaluator
 		}
-		return as[i].Revision < as[j].Revision
-	})
+		return a.Revision < b.Revision
+	}); err != nil {
+		return sampleJSON{}, err
+	}
 	out.Assessments = as
 	return out, nil
 }
@@ -245,16 +288,22 @@ func projectAssessment(a eval.Assessment) (assessmentJSON, error) {
 		}
 		ms[i] = measurementJSON{Name: string(m.Name), Value: m.Value, Unit: m.Unit}
 	}
-	sort.Slice(ms, func(i, j int) bool { return ms[i].Name < ms[j].Name })
+	if err := canonicalSort(ms, func(a, b measurementJSON) bool { return a.Name < b.Name }); err != nil {
+		return assessmentJSON{}, err
+	}
 
 	fs := make([]findingJSON, len(a.Findings))
 	for i, f := range a.Findings {
 		fs[i] = findingJSON{Code: string(f.Code), Severity: f.Severity, Evidence: f.Evidence}
 	}
-	sort.Slice(fs, func(i, j int) bool { return fs[i].Code < fs[j].Code })
+	if err := canonicalSort(fs, func(a, b findingJSON) bool { return a.Code < b.Code }); err != nil {
+		return assessmentJSON{}, err
+	}
 
 	ev := append([]eval.Evidence(nil), a.Evidence...)
-	sort.Slice(ev, func(i, j int) bool { return ev[i].ID < ev[j].ID })
+	if err := canonicalSort(ev, func(a, b eval.Evidence) bool { return a.ID < b.ID }); err != nil {
+		return assessmentJSON{}, err
+	}
 
 	return assessmentJSON{
 		Evaluator:     string(a.Evaluator),

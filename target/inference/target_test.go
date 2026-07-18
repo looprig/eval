@@ -388,6 +388,21 @@ func TestObserve_NoSecretLeakIntoObservation(t *testing.T) {
 	if strings.Contains(blob, secret) {
 		t.Errorf("secret leaked into trace/subject metadata")
 	}
+
+	// Positive: the projected SAFE content MUST be present in the SAME marshaled
+	// bytes, so this leak test cannot pass on an empty/blank Observation. The
+	// usage token counts and model revision are safe and expected.
+	for _, want := range []string{`"InputTokens":1`, `"OutputTokens":1`} {
+		if !strings.Contains(blob, want) {
+			t.Errorf("expected safe usage content %q missing from observation:\n%s", want, blob)
+		}
+	}
+	if obs.Trace.Model != "m" {
+		t.Errorf("Trace.Model = %q, want m (projected model revision)", obs.Trace.Model)
+	}
+	if obs.Subject.Revision != "m" {
+		t.Errorf("Subject.Revision = %q, want m (projected model revision)", obs.Subject.Revision)
+	}
 }
 
 func mustJSON(t *testing.T, v any) string {
