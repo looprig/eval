@@ -32,6 +32,16 @@ import (
 // is recorded as an evaluator-stage error, not a quality verdict.
 const FindingEvaluatorError FindingCode = "evaluator_error"
 
+// FindingEvaluatorInvalidAssessment is the safe code attached to the error-status
+// assessment the runner synthesises when an evaluator returns a nil error but an
+// Assessment that fails Assessment.Validate. The invalid verdict is discarded
+// (fail-secure): a buggy or hostile evaluator must not place an unvalidated
+// verdict — a zero value, a pass carrying a severe finding, a dangling evidence
+// reference, a mismatched identity — into the report. The validation error is
+// never echoed (it may carry untrusted content); the failure is recorded as an
+// evaluator-stage error, not a quality verdict.
+const FindingEvaluatorInvalidAssessment FindingCode = "evaluator_invalid_assessment"
+
 // Run executes suite against target, applying evaluators to every resulting
 // observation, and returns the report. It validates all inputs at preflight and
 // returns the zero Report with a typed error if any input is ill-formed. During
@@ -67,9 +77,19 @@ func Run(ctx context.Context, cfg RunConfig, suite Suite, target Target, evaluat
 		Summary:    summarize(samples),
 		Provenance: provenanceOf(suite, evaluators, samples),
 	}
-	// A non-nil context error means the run was cancelled; surface it alongside
-	// the partial report. A clean run returns a nil error.
-	return report, ctx.Err()
+	// Surface the context error only when work was actually truncated: at least
+	// one slot was left unfilled because a unit never started (or did not
+	// complete) before cancellation. compact drops those nil slots, so a shorter
+	// sample slice than the slot count is the signal. When every slot completed,
+	// the report is whole and we return a nil error even if ctx was cancelled
+	// after the final unit finished — otherwise a late, harmless cancellation
+	// would make the common `if err != nil { discard }` caller throw away a
+	// complete report.
+	var runErr error
+	if len(samples) < len(slots) {
+		runErr = ctx.Err()
+	}
+	return report, runErr
 }
 
 // preflight validates every input before any execution. It rejects an ill-formed
@@ -173,8 +193,12 @@ scheduling:
 // observation is recorded as a stage error and stops the sample there; it never
 // reaches the evaluators and never discards sibling samples.
 func (r *runner) runUnit(ctx context.Context, u sampleUnit) *SampleReport {
-	// Copy the scenario so nothing downstream can observe or mutate through the
-	// caller's backing array.
+	// Shallow-copy the scenario so a target cannot reach the caller's backing
+	// array through the top-level struct header. This guards the header only:
+	// Input, Labels, and Expectation still share backing with the caller. That is
+	// sufficient because the Target.Observe contract declares the Scenario and
+	// those fields read-only; a compliant target never mutates them, so no deep
+	// copy is warranted.
 	scenario := r.scenarios[u.scenarioIndex]
 	rep := &SampleReport{ScenarioID: scenario.ID, TrialIndex: u.trialIndex}
 
@@ -232,7 +256,10 @@ func (r *runner) assess(ctx context.Context, sample Sample) []Assessment {
 // evaluate runs one evaluator under the per-evaluator timeout (when configured).
 // A non-nil error return is the evaluator's own failure to reach a verdict; it is
 // converted to an error-status assessment and never leaks the underlying error
-// text. When the evaluator returns no error its assessment is used as-is.
+// text. When the evaluator returns no error, its assessment is trusted only after
+// it passes Assessment.Validate: a verdict that fails validation is discarded and
+// contained as an evaluator-stage error (fail-secure), so a buggy or hostile
+// evaluator can never place an invalid verdict into the report.
 func (r *runner) evaluate(ctx context.Context, ev Evaluator, desc Descriptor, sample Sample) Assessment {
 	ectx := ctx
 	if r.cfg.EvaluatorTimeout > 0 {
@@ -244,6 +271,14 @@ func (r *runner) evaluate(ctx context.Context, ev Evaluator, desc Descriptor, sa
 	if err != nil {
 		return Errored(desc, evaluatorErrorFinding())
 	}
+	if err := a.Validate(); err != nil {
+		// Fail secure: the returned verdict is ill-formed (a zero value, a pass
+		// carrying a severe finding, a duplicate measurement, a dangling evidence
+		// reference, or an identity that does not match the descriptor). Do not
+		// trust it; contain it as an evaluator-stage error without echoing the
+		// validation error's untrusted content.
+		return Errored(desc, evaluatorInvalidAssessmentFinding())
+	}
 	return a
 }
 
@@ -254,6 +289,17 @@ func evaluatorErrorFinding() Finding {
 		Code:     FindingEvaluatorError,
 		Severity: SeverityHigh,
 		Message:  "evaluator failed to produce a verdict",
+	}
+}
+
+// evaluatorInvalidAssessmentFinding is the fixed, safe finding attached to the
+// error-status assessment synthesised when an evaluator returns an assessment
+// that fails validation. It never embeds the validation error text.
+func evaluatorInvalidAssessmentFinding() Finding {
+	return Finding{
+		Code:     FindingEvaluatorInvalidAssessment,
+		Severity: SeverityHigh,
+		Message:  "evaluator returned an invalid assessment",
 	}
 }
 

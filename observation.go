@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"math"
 	"strconv"
 	"time"
 
@@ -119,7 +120,15 @@ func (r MessageRange) validate(convLen int) error {
 	}
 	// Guard against int overflow in Start+Len by comparing against the room left.
 	if r.Start > convLen || r.Len > convLen-r.Start {
-		return &IndexRangeError{Field: "MessageRange", Index: r.Start + r.Len, Len: convLen}
+		// Report the range's exclusive end, but saturate on overflow: with a huge
+		// Len, Start+Len would wrap to a negative, misleading index. Either way the
+		// boundary is out of [0,convLen); a saturated MaxInt reads as out-of-range
+		// without lying about the sign.
+		end := r.Start + r.Len
+		if end < r.Start {
+			end = math.MaxInt
+		}
+		return &IndexRangeError{Field: "MessageRange", Index: end, Len: convLen}
 	}
 	return nil
 }

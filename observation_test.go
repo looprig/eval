@@ -3,6 +3,7 @@ package eval
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -304,5 +305,35 @@ func TestIndexRangeErrorMessageSafe(t *testing.T) {
 	e := &IndexRangeError{Field: "MessageRange", Index: 5, Len: 4}
 	if !strings.Contains(e.Error(), "MessageRange") {
 		t.Errorf("IndexRangeError.Error() = %q, missing field", e.Error())
+	}
+}
+
+// TestMessageRangeValidateOverflowSafe asserts a huge Len does not overflow the
+// reported diagnostic index into a negative, misleading value. The range is still
+// rejected, and the reported index is non-negative.
+func TestMessageRangeValidateOverflowSafe(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		r    MessageRange
+	}{
+		{"len maxint", MessageRange{Start: 1, Len: math.MaxInt}},
+		{"start maxint", MessageRange{Start: math.MaxInt, Len: math.MaxInt}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.r.validate(4)
+			var ir *IndexRangeError
+			if !errors.As(err, &ir) {
+				t.Fatalf("validate() = %v, want *IndexRangeError", err)
+			}
+			if ir.Index < 0 {
+				t.Fatalf("reported index overflowed to negative: %d", ir.Index)
+			}
+			if ir.Len != 4 {
+				t.Fatalf("reported bound = %d, want 4", ir.Len)
+			}
+		})
 	}
 }

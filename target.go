@@ -16,6 +16,13 @@ import "context"
 // execution, and it returns a typed error on failure rather than encoding
 // failure as an observation. A target error is a stage error and must never be
 // reported as a failed assessment.
+//
+// Observe's Scenario argument is READ-ONLY. The passed Scenario and everything it
+// references — its Input, Labels, and Expectation — share backing with the
+// caller's suite; an implementation MUST NOT mutate them. The runner shallow-
+// copies the Scenario struct header only and relies on this contract in place of
+// a deep copy. A target that needs to derive a modified scenario must copy what
+// it changes.
 type Target interface {
 	Name() string
 	Observe(context.Context, Scenario) (Observation, error)

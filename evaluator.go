@@ -120,10 +120,7 @@ func (d Descriptor) CheckRequires(s Sample) (Assessment, bool) {
 	if len(missing) == 0 {
 		return Assessment{}, true
 	}
-	msg := "missing required evidence: " + joinEvidenceKinds(missing)
-	if len(msg) > MaxFindingMessageBytes {
-		msg = msg[:MaxFindingMessageBytes]
-	}
+	msg := truncateUTF8("missing required evidence: "+joinEvidenceKinds(missing), MaxFindingMessageBytes)
 	return Unverified(d, Finding{
 		Code:     FindingMissingRequiredEvidence,
 		Severity: SeverityMedium,
@@ -148,6 +145,20 @@ func (d Descriptor) missingRequires(s Sample) []EvidenceKind {
 		}
 	}
 	return missing
+}
+
+// truncateUTF8 returns s truncated to at most maxBytes bytes without splitting a
+// multibyte rune, so the result is always valid UTF-8 when s is. It backs the cut
+// point up to the nearest rune boundary at or below maxBytes.
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	b := maxBytes
+	for b > 0 && !utf8.RuneStart(s[b]) {
+		b--
+	}
+	return s[:b]
 }
 
 // joinEvidenceKinds renders a list of EvidenceKinds as a comma-separated string.

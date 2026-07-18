@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // newValidDescriptor builds a fully valid descriptor whose single required
@@ -194,5 +195,42 @@ func TestEvaluatorContract(t *testing.T) {
 	}
 	if !errors.Is(err, infra) {
 		t.Fatalf("error = %v, want the injected infrastructure error", err)
+	}
+}
+
+// TestTruncateUTF8 asserts the missing-evidence message truncation cuts on a
+// rune boundary and never emits invalid UTF-8, even when the byte cap lands in
+// the middle of a multibyte rune.
+func TestTruncateUTF8(t *testing.T) {
+	t.Parallel()
+	// "é" is 2 bytes (0xC3 0xA9); "世" is 3 bytes. Repeating them lets a byte cap
+	// fall mid-rune so a naive s[:max] would split it.
+	tests := []struct {
+		name     string
+		in       string
+		maxBytes int
+	}{
+		{"empty", "", 8},
+		{"ascii under cap", "hello", 8},
+		{"ascii at cap", "hello", 5},
+		{"ascii over cap", "hello world", 5},
+		{"multibyte cap mid-rune", strings.Repeat("é", 10), 5},
+		{"multibyte cap mid-rune three-byte", strings.Repeat("世", 10), 7},
+		{"cap zero", "héllo", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := truncateUTF8(tt.in, tt.maxBytes)
+			if len(got) > tt.maxBytes {
+				t.Fatalf("truncateUTF8(%q, %d) = %q (%d bytes), exceeds cap", tt.in, tt.maxBytes, got, len(got))
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("truncateUTF8(%q, %d) = %q, not valid UTF-8", tt.in, tt.maxBytes, got)
+			}
+			if !strings.HasPrefix(tt.in, got) {
+				t.Fatalf("truncateUTF8(%q, %d) = %q, not a prefix of input", tt.in, tt.maxBytes, got)
+			}
+		})
 	}
 }

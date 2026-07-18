@@ -110,6 +110,15 @@ func errEvaluator(name string) stubEvaluator {
 	}}
 }
 
+// invalidEvaluator returns the given (invalid) assessment with a nil error,
+// modelling a buggy or hostile evaluator that reports a well-typed but
+// ill-formed verdict.
+func invalidEvaluator(name string, a Assessment) stubEvaluator {
+	return stubEvaluator{desc: stubDesc(name), eval: func(context.Context, Sample) (Assessment, error) {
+		return a, nil
+	}}
+}
+
 func TestRunSuccess(t *testing.T) {
 	t.Parallel()
 	report, err := Run(context.Background(), RunConfig{}, runSuite("s0"), okTarget(), passEvaluator("q"))
@@ -211,6 +220,74 @@ func TestRunEvaluatorErrorBesideSuccess(t *testing.T) {
 	}
 }
 
+func TestRunInvalidAssessmentIsContained(t *testing.T) {
+	t.Parallel()
+	// A buggy/hostile evaluator returns a nil error with an ill-formed verdict.
+	// The runner must never trust it: it is contained as an evaluator-stage error
+	// (fail-secure), the raw invalid verdict never reaches the report, and the
+	// sibling's completed assessment is retained.
+	tests := []struct {
+		name    string
+		invalid Assessment
+	}{
+		{
+			name:    "zero value",
+			invalid: Assessment{},
+		},
+		{
+			name: "pass carrying critical finding",
+			invalid: Assessment{
+				Evaluator: "broken", // valid identity, but status is inconsistent
+				Revision:  "v1",
+				Status:    StatusPass,
+				Findings:  []Finding{{Code: "crit", Severity: SeverityCritical, Message: "should not pass"}},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// Sanity: the fixture must actually be invalid, else the test proves nothing.
+			if err := tt.invalid.Validate(); err == nil {
+				t.Fatalf("fixture assessment unexpectedly valid; test would be vacuous")
+			}
+			report, err := Run(context.Background(), RunConfig{}, runSuite("s0"), okTarget(),
+				invalidEvaluator("broken", tt.invalid), passEvaluator("good"))
+			if err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			as := report.Samples[0].Assessments
+			if len(as) != 2 {
+				t.Fatalf("got %d assessments, want 2", len(as))
+			}
+			// The invalid verdict is contained as an evaluator-stage error, never echoed.
+			if as[0].Status != StatusError {
+				t.Fatalf("contained assessment status = %q, want error", as[0].Status)
+			}
+			if as[0].Evaluator != "broken" {
+				t.Fatalf("contained assessment evaluator = %q, want broken", as[0].Evaluator)
+			}
+			if len(as[0].Findings) != 1 || as[0].Findings[0].Code != FindingEvaluatorInvalidAssessment {
+				t.Fatalf("contained assessment findings = %+v, want single %q", as[0].Findings, FindingEvaluatorInvalidAssessment)
+			}
+			// The raw invalid status must not have leaked through.
+			if as[0].Status == tt.invalid.Status && tt.invalid.Status != StatusError {
+				t.Fatalf("raw invalid verdict leaked into report: %q", as[0].Status)
+			}
+			// The sibling's completed assessment is unaffected.
+			if as[1].Status != StatusPass || as[1].Evaluator != "good" {
+				t.Fatalf("sibling assessment altered: %+v", as[1])
+			}
+			// Every assessment the runner emits must itself be valid.
+			for i, a := range as {
+				if verr := a.Validate(); verr != nil {
+					t.Fatalf("assessment[%d] emitted by Run is invalid: %v", i, verr)
+				}
+			}
+		})
+	}
+}
+
 func TestRunTargetTimeout(t *testing.T) {
 	t.Parallel()
 	target := stubTarget{name: "slow", observe: func(ctx context.Context, _ Scenario) (Observation, error) {
@@ -304,6 +381,34 @@ func TestRunCancellationStopsNewWorkAndKeepsCompleted(t *testing.T) {
 	}
 	if report.Samples[0].ScenarioID != "s0" {
 		t.Fatalf("completed sample = %q, want s0", report.Samples[0].ScenarioID)
+	}
+	if len(report.Samples[0].Assessments) != 1 || report.Samples[0].Assessments[0].Status != StatusPass {
+		t.Fatalf("completed assessment not retained: %+v", report.Samples[0].Assessments)
+	}
+}
+
+func TestRunCancellationAfterCompletionReturnsNilError(t *testing.T) {
+	t.Parallel()
+	// Cancellation lands during the only unit's evaluation, but the evaluator
+	// ignores ctx and completes, so every slot is filled. A run that finished all
+	// its work must return a nil error even though ctx is now cancelled, so a
+	// caller with the common `if err != nil { discard }` idiom keeps the whole
+	// report.
+	ctx, cancel := context.WithCancel(context.Background())
+	d := stubDesc("q")
+	ev := stubEvaluator{desc: d, eval: func(context.Context, Sample) (Assessment, error) {
+		cancel() // cancel after all work is effectively done
+		return Pass(d), nil
+	}}
+	report, err := Run(ctx, RunConfig{Concurrency: 1}, runSuite("s0"), okTarget(), ev)
+	if err != nil {
+		t.Fatalf("completed run must return nil error even when ctx is later cancelled, got %v", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatalf("test precondition failed: ctx should be cancelled by now")
+	}
+	if len(report.Samples) != 1 {
+		t.Fatalf("got %d samples, want 1 (full report)", len(report.Samples))
 	}
 	if len(report.Samples[0].Assessments) != 1 || report.Samples[0].Assessments[0].Status != StatusPass {
 		t.Fatalf("completed assessment not retained: %+v", report.Samples[0].Assessments)
