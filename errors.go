@@ -163,6 +163,54 @@ const (
 	statusReasonMeasurementOnNonVerdict = "non-verdict status carries a quality measurement"
 )
 
+// DuplicateScenarioError reports that a suite carried two scenarios with the
+// same ID, which would make two cases indistinguishable in the report and in
+// baseline comparison. The offending ID is caller-supplied and withheld from the
+// message.
+type DuplicateScenarioError struct{}
+
+func (e *DuplicateScenarioError) Error() string {
+	return "eval: duplicate scenario id in suite"
+}
+
+// NilTargetError reports that Run was called with a nil target. A run has no
+// meaning without a target to execute, so this is rejected at preflight.
+type NilTargetError struct{}
+
+func (e *NilTargetError) Error() string {
+	return "eval: target must not be nil"
+}
+
+// NilEvaluatorError reports that Run was given a nil evaluator in its evaluator
+// list. A nil evaluator cannot describe or evaluate anything, so it is rejected
+// at preflight rather than panicking during execution.
+type NilEvaluatorError struct{}
+
+func (e *NilEvaluatorError) Error() string {
+	return "eval: evaluator must not be nil"
+}
+
+// TargetError reports that a sample's target stage failed: the target returned
+// an error, timed out, was cancelled, or produced an observation that did not
+// validate. It is a stage error, never a failed quality assessment. The wrapped
+// Cause is available via Unwrap so callers can classify the failure (for example
+// errors.Is(err, context.DeadlineExceeded)); the Error() text is fixed and never
+// echoes the cause, which may originate outside the process and carry untrusted
+// content.
+type TargetError struct {
+	// Cause is the underlying failure. It may be a context error, a target's own
+	// error, or an observation ValidationError.
+	Cause error
+}
+
+func (e *TargetError) Error() string {
+	return "eval: target stage failed"
+}
+
+func (e *TargetError) Unwrap() error {
+	return e.Cause
+}
+
 // SampleSubjectMismatchError reports that a sample's observation described a
 // subject whose revision did not match the target revision the sample's scenario
 // declares. This is a stage error — the target produced an observation for the
