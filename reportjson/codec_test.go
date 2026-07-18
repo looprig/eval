@@ -152,6 +152,31 @@ func TestRoundTrip(t *testing.T) {
 				return r
 			}(),
 		},
+		{
+			name: "assessment with positive structured-output evidence",
+			report: func() eval.Report {
+				r := baseReport()
+				r.Samples[0].Assessments = []eval.Assessment{
+					{
+						Evaluator: eval.Name("ev"), Revision: eval.Revision("1"), Status: eval.StatusPass,
+						Findings: []eval.Finding{{
+							Code: eval.FindingCode("schema_result_satisfied"), Severity: eval.SeverityInfo,
+							Evidence: []eval.EvidenceRef{{Evidence: eval.EvidenceID("so1")}},
+						}},
+						Evidence: []eval.Evidence{{
+							ID:   eval.EvidenceID("so1"),
+							Kind: eval.EvidenceStructuredOutput,
+							StructuredOutput: &eval.StructuredOutput{
+								SchemaName:     eval.Name("score"),
+								SchemaRevision: eval.Revision("v1"),
+							},
+						}},
+					},
+				}
+				r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusPass: 1}
+				return r
+			}(),
+		},
 	}
 
 	for _, tt := range tests {

@@ -18,9 +18,12 @@ func TestSchemaResult(t *testing.T) {
 		wantStatus eval.AssessmentStatus
 	}{
 		{
-			name:       "usage present, no structured error, satisfied schema",
+			// Regression for the false positive: an ordinary response emits usage
+			// evidence for ANY completion. Usage alone is NOT proof of structured
+			// output, so this must be Unverified — never Pass.
+			name:       "only generic usage, no structured-output evidence, unverified",
 			evidence:   []eval.Evidence{usageEv("u-1")},
-			wantStatus: eval.StatusPass,
+			wantStatus: eval.StatusUnverified,
 		},
 		{
 			name:       "structured error present, failed schema",
@@ -28,14 +31,27 @@ func TestSchemaResult(t *testing.T) {
 			wantStatus: eval.StatusFail,
 		},
 		{
-			name:       "required usage evidence absent, unverified",
+			name:       "positive structured-output evidence, passed schema",
+			evidence:   []eval.Evidence{usageEv("u-1"), structOutEv("so-1", "score", "v1")},
+			wantStatus: eval.StatusPass,
+		},
+		{
+			name:       "no evidence at all, unverified",
 			evidence:   nil,
 			wantStatus: eval.StatusUnverified,
 		},
 		{
-			name:       "only a structured error but no required usage evidence, unverified",
+			// A structured error alone (no usage) is still a schema failure: Fail.
+			name:       "structured error alone, failed schema",
 			evidence:   []eval.Evidence{structErrEv("se-1", eval.StructuredErrorInvalidJSON)},
-			wantStatus: eval.StatusUnverified,
+			wantStatus: eval.StatusFail,
+		},
+		{
+			// Error takes precedence over a positive signal: a failure is never
+			// masked by a success in the same trace.
+			name:       "error and positive both present, error wins",
+			evidence:   []eval.Evidence{structOutEv("so-1", "score", "v1"), structErrEv("se-1", eval.StructuredErrorMissingField)},
+			wantStatus: eval.StatusFail,
 		},
 	}
 
@@ -46,13 +62,12 @@ func TestSchemaResult(t *testing.T) {
 			if a.Status != tt.wantStatus {
 				t.Fatalf("status = %q, want %q", a.Status, tt.wantStatus)
 			}
-			if a.Status == eval.StatusPass {
-				return
-			}
-			// A non-pass must never be a silently inferred pass; a fail must cite
-			// the structured-error evidence.
-			if a.Status == eval.StatusFail && !findingHasResolvingEvidence(t, a) {
-				t.Fatal("fail assessment carries a finding without a resolving evidence reference")
+			// Both a fail and a pass must cite a resolving evidence reference; a
+			// verdict is never left bare over its supporting evidence.
+			if a.Status == eval.StatusFail || a.Status == eval.StatusPass {
+				if !findingHasResolvingEvidence(t, a) {
+					t.Fatalf("%s assessment carries a finding without a resolving evidence reference", a.Status)
+				}
 			}
 		})
 	}
@@ -62,7 +77,7 @@ func TestSchemaResultUnverifiedNeverPass(t *testing.T) {
 	t.Parallel()
 	a := evaluate(t, SchemaResult(), sampleOf(obs(content.AgenticMessages{aiText("no output recorded")})))
 	if a.Status == eval.StatusPass {
-		t.Fatal("missing required evidence must never produce a pass")
+		t.Fatal("absent structured-output evidence must never produce a pass")
 	}
 	if a.Status != eval.StatusUnverified {
 		t.Fatalf("status = %q, want %q", a.Status, eval.StatusUnverified)

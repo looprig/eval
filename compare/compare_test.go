@@ -175,6 +175,38 @@ func TestCompareIncompatibleNotAveraged(t *testing.T) {
 	}
 }
 
+func TestCompareUnitMismatchForcesChanged(t *testing.T) {
+	t.Parallel()
+
+	// Same measurement name and equal numeric value, but incompatible units:
+	// 1 second is not 1 count. The mismatch must force CaseChanged (never
+	// CaseUnchanged) and be surfaced on the delta.
+	latency := func(unit eval.Unit, v float64) eval.Measurement {
+		return eval.Measurement{Name: eval.Name("latency"), Value: v, Unit: unit}
+	}
+	baseline := report(sample("s1", 0, eval.Pass(desc("e", "1"), latency(eval.UnitSecond, 1.0))))
+	candidate := report(sample("s1", 0, eval.Pass(desc("e", "1"), latency(eval.UnitCount, 1.0))))
+
+	cmp, err := compare.Compare(baseline, candidate)
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	cc := findCase(t, cmp, "s1", "e")
+	if cc.Class != compare.CaseChanged {
+		t.Fatalf("class = %q, want %q (unit-mismatched measurements must not be unchanged)", cc.Class, compare.CaseChanged)
+	}
+	if len(cc.Distributions) != 1 {
+		t.Fatalf("distributions = %d, want 1", len(cc.Distributions))
+	}
+	d := cc.Distributions[0]
+	if !d.UnitMismatch {
+		t.Fatalf("delta must surface the unit mismatch: %+v", d)
+	}
+	if d.BaselineUnit != eval.UnitSecond || d.CandidateUnit != eval.UnitCount {
+		t.Fatalf("delta must expose both units: baseline=%q candidate=%q", d.BaselineUnit, d.CandidateUnit)
+	}
+}
+
 func TestCompareRejectsNonFinite(t *testing.T) {
 	t.Parallel()
 

@@ -77,11 +77,22 @@ type Distribution struct {
 
 // MeasurementDelta pairs a measurement's baseline and candidate distributions.
 // It is populated only for compatible cases.
+//
+// A measurement name may appear on both sides carrying DIFFERENT units (for
+// example latency in seconds on the baseline and a bare count on the candidate).
+// Numbers measured in different units are not comparable, so the two units are
+// tracked separately and never collapsed: BaselineUnit and CandidateUnit expose
+// each side's unit, and UnitMismatch flags the incompatibility. Unit is the
+// agreed unit when both sides match (and the baseline's when they do not),
+// retained for the common compatible case.
 type MeasurementDelta struct {
-	Name      eval.Name
-	Unit      eval.Unit
-	Baseline  Distribution
-	Candidate Distribution
+	Name          eval.Name
+	Unit          eval.Unit
+	BaselineUnit  eval.Unit
+	CandidateUnit eval.Unit
+	UnitMismatch  bool
+	Baseline      Distribution
+	Candidate     Distribution
 }
 
 // CaseComparison is the diff of one case. Baseline and Candidate hold the
@@ -259,7 +270,10 @@ func classify(base, cand []TrialResult, deltas []MeasurementDelta) CaseClass {
 		return CaseChanged
 	}
 	for _, d := range deltas {
-		if d.Baseline != d.Candidate {
+		// A unit mismatch makes the two sides incomparable: equal raw numbers in
+		// different units are NOT unchanged. Never let a mismatch fall through to
+		// CaseUnchanged.
+		if d.UnitMismatch || d.Baseline != d.Candidate {
 			return CaseChanged
 		}
 	}
@@ -273,12 +287,12 @@ func distributions(base, cand []TrialResult) []MeasurementDelta {
 	baseAgg := aggregate(base)
 	candAgg := aggregate(cand)
 
-	names := make(map[eval.Name]eval.Unit)
-	for n, acc := range baseAgg {
-		names[n] = acc.unit
+	names := make(map[eval.Name]struct{}, len(baseAgg)+len(candAgg))
+	for n := range baseAgg {
+		names[n] = struct{}{}
 	}
-	for n, acc := range candAgg {
-		names[n] = acc.unit
+	for n := range candAgg {
+		names[n] = struct{}{}
 	}
 	if len(names) == 0 {
 		return nil
@@ -292,11 +306,45 @@ func distributions(base, cand []TrialResult) []MeasurementDelta {
 
 	out := make([]MeasurementDelta, 0, len(ordered))
 	for _, n := range ordered {
+		bAcc, onBase := baseAgg[n]
+		cAcc, onCand := candAgg[n]
+
+		var baseUnit, candUnit eval.Unit
+		if onBase {
+			baseUnit = bAcc.unit
+		}
+		if onCand {
+			candUnit = cAcc.unit
+		}
+		// A mismatch is only meaningful when the name is present on both sides with
+		// differing units; a name on only one side has nothing to conflict with.
+		mismatch := onBase && onCand && baseUnit != candUnit
+
+		// Unit records the agreed unit for the common compatible case; when the
+		// units differ it falls back to the baseline's (never silently the
+		// candidate's, which was the last-writer-wins bug), with the divergence
+		// made explicit through BaselineUnit/CandidateUnit/UnitMismatch.
+		agreed := baseUnit
+		if !onBase {
+			agreed = candUnit
+		}
+
+		var baseDist, candDist Distribution
+		if onBase {
+			baseDist = bAcc.distribution()
+		}
+		if onCand {
+			candDist = cAcc.distribution()
+		}
+
 		out = append(out, MeasurementDelta{
-			Name:      n,
-			Unit:      names[n],
-			Baseline:  baseAgg[n].distribution(),
-			Candidate: candAgg[n].distribution(),
+			Name:          n,
+			Unit:          agreed,
+			BaselineUnit:  baseUnit,
+			CandidateUnit: candUnit,
+			UnitMismatch:  mismatch,
+			Baseline:      baseDist,
+			Candidate:     candDist,
 		})
 	}
 	return out

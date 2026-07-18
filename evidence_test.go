@@ -67,6 +67,29 @@ func TestEvidenceValidateVariants(t *testing.T) {
 			}},
 		},
 		{
+			name: "structured output success",
+			evidence: Evidence{ID: "e6b", Kind: EvidenceStructuredOutput, StructuredOutput: &StructuredOutput{
+				SchemaName:     "score",
+				SchemaRevision: "v1",
+			}},
+		},
+		{
+			name:     "structured output success with empty identity",
+			evidence: Evidence{ID: "e6c", Kind: EvidenceStructuredOutput, StructuredOutput: &StructuredOutput{}},
+		},
+		{
+			name:     "structured output kind without payload",
+			evidence: Evidence{ID: "e6d", Kind: EvidenceStructuredOutput},
+			wantErr:  true,
+		},
+		{
+			name: "structured output kind with mismatched payload",
+			evidence: Evidence{ID: "e6e", Kind: EvidenceStructuredOutput, StructuredError: &StructuredOutputError{
+				Reason: StructuredErrorInvalidJSON,
+			}},
+			wantErr: true,
+		},
+		{
 			name: "diagnostic",
 			evidence: Evidence{ID: "e7", Kind: EvidenceDiagnostic, Diagnostic: &DiagnosticEvidence{
 				Code:     "judge_unavailable",
@@ -206,7 +229,8 @@ func TestEvidenceKindValidate(t *testing.T) {
 
 	valid := []EvidenceKind{
 		EvidenceConversationExcerpt, EvidenceMessageIndex, EvidenceTiming,
-		EvidenceUsage, EvidenceToolOperation, EvidenceStructuredError, EvidenceDiagnostic,
+		EvidenceUsage, EvidenceToolOperation, EvidenceStructuredError,
+		EvidenceStructuredOutput, EvidenceDiagnostic,
 	}
 	for _, k := range valid {
 		if err := k.Validate(); err != nil {

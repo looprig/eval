@@ -144,6 +144,19 @@ func structErrEv(id string, reason eval.StructuredErrorReason) eval.Evidence {
 	}
 }
 
+// structOutEv builds a positive structured-output evidence entry: the subject
+// produced output that validated against its declared schema.
+func structOutEv(id, schemaName, schemaRev string) eval.Evidence {
+	return eval.Evidence{
+		ID:   eval.EvidenceID(id),
+		Kind: eval.EvidenceStructuredOutput,
+		StructuredOutput: &eval.StructuredOutput{
+			SchemaName:     eval.Name(schemaName),
+			SchemaRevision: eval.Revision(schemaRev),
+		},
+	}
+}
+
 // --- RequiredText ---
 
 func TestRequiredText(t *testing.T) {
