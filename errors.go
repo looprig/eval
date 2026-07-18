@@ -1,5 +1,7 @@
 package eval
 
+import "strconv"
+
 // This file declares the concrete, classifiable error types returned by the
 // package's Validate methods. Public failures are typed so callers classify
 // them with errors.As, never by matching error strings. Diagnostic text is
@@ -41,3 +43,60 @@ func (e *InvalidEnumError) Error() string {
 	}
 	return "eval: unknown " + e.Enum + " value " + e.Value
 }
+
+// IndexRangeError reports that an integer index or range lay outside the
+// conversation it addresses. Field names the offending domain field; Index is
+// the offending index (or range boundary); Len is the conversation length. All
+// three are safe integers/constants — no conversation content is embedded.
+type IndexRangeError struct {
+	// Field is the domain field name, e.g. "MessageRange" or
+	// "ConversationExcerpt.MessageIndex".
+	Field string
+	// Index is the offending index or range boundary.
+	Index int
+	// Len is the length of the conversation the index must fall within.
+	Len int
+}
+
+func (e *IndexRangeError) Error() string {
+	return "eval: " + e.Field + " index " + strconv.Itoa(e.Index) +
+		" out of range [0," + strconv.Itoa(e.Len) + ")"
+}
+
+// DuplicateEvidenceError reports that an EvidenceID appeared more than once in a
+// trace, which would corrupt evidence reference resolution and comparison. The
+// offending identifier is deliberately withheld from the message: EvidenceIDs
+// are caller-supplied and a hostile value must not leak through a diagnostic.
+type DuplicateEvidenceError struct{}
+
+func (e *DuplicateEvidenceError) Error() string {
+	return "eval: duplicate evidence id in trace"
+}
+
+// UnknownEvidenceError reports that an EvidenceRef pointed at an EvidenceID that
+// no evidence entry in the trace defines. The dangling identifier is withheld
+// for the same reason as DuplicateEvidenceError.
+type UnknownEvidenceError struct{}
+
+func (e *UnknownEvidenceError) Error() string {
+	return "eval: evidence reference to unknown evidence id"
+}
+
+// EvidencePayloadError reports that an Evidence value violated the tagged-union
+// invariant: it carried no payload, more than one payload, or a payload that did
+// not match its Kind. Reason is drawn only from the fixed vocabulary below, so
+// no untrusted content is ever embedded.
+type EvidencePayloadError struct {
+	// Reason is one of the payloadReason* constants.
+	Reason string
+}
+
+func (e *EvidencePayloadError) Error() string {
+	return "eval: evidence payload invalid: " + e.Reason
+}
+
+const (
+	payloadReasonNone     = "no payload set"
+	payloadReasonMultiple = "multiple payloads set"
+	payloadReasonMismatch = "payload does not match kind"
+)
