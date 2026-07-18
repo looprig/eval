@@ -37,14 +37,15 @@ const (
 // in the conversation. A nil/empty Conversation is a valid empty thread, but any
 // message index or range must then be empty too.
 //
-// The optional Expectation field is deliberately absent in this phase; it is
-// introduced with the Expectation type and wired into Observation and Scenario
-// in a later task.
+// Expectation is optional qualification data (see expectation.go). Qualification
+// observations carry it; production observations normally omit it. When present
+// it is validated by Observation.Validate; a nil Expectation is valid.
 type Observation struct {
 	Conversation content.AgenticMessages
 	Scope        Scope
 	Subject      Subject
 	Trace        Trace
+	Expectation  *Expectation
 }
 
 // SubjectKind names what is under evaluation. There is no valid zero value: a
@@ -389,10 +390,10 @@ func (o Operation) Validate() error {
 }
 
 // Validate reports whether the observation is well-formed: a valid scope and
-// subject, and a trace whose time range, message ranges, evidence, and
-// operation references are all consistent with the conversation. It is
-// read-only and preserves the order of the conversation, operations, and
-// evidence.
+// subject, a trace whose time range, message ranges, evidence, and operation
+// references are all consistent with the conversation, and a valid Expectation
+// when one is present. It is read-only and preserves the order of the
+// conversation, operations, and evidence.
 func (o Observation) Validate() error {
 	if err := o.Scope.Validate(); err != nil {
 		return err
@@ -400,5 +401,10 @@ func (o Observation) Validate() error {
 	if err := o.Subject.Validate(); err != nil {
 		return err
 	}
-	return o.Trace.validate(len(o.Conversation))
+	if err := o.Trace.validate(len(o.Conversation)); err != nil {
+		return err
+	}
+	// Expectation is optional; validate it only when present. A nil pointer is a
+	// valid "no expectation" and Expectation.Validate handles nil defensively.
+	return o.Expectation.Validate()
 }

@@ -100,3 +100,25 @@ const (
 	payloadReasonMultiple = "multiple payloads set"
 	payloadReasonMismatch = "payload does not match kind"
 )
+
+// DuplicateLabelError reports that a scenario carried two labels with the same
+// key, which would make the label set ambiguous. The offending key is withheld
+// from the message: label keys are caller-supplied and a hostile value must not
+// leak through a diagnostic.
+type DuplicateLabelError struct{}
+
+func (e *DuplicateLabelError) Error() string {
+	return "eval: duplicate scenario label key"
+}
+
+// SampleSubjectMismatchError reports that a sample's observation described a
+// subject whose revision did not match the target revision the sample's scenario
+// declares. This is a stage error — the target produced an observation for the
+// wrong revision — not a failed assessment. Both revisions are withheld from the
+// message: the subject revision originates with the target and must not leak
+// through a diagnostic.
+type SampleSubjectMismatchError struct{}
+
+func (e *SampleSubjectMismatchError) Error() string {
+	return "eval: observation subject revision does not match scenario revision"
+}
