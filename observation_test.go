@@ -256,6 +256,10 @@ func isBareError(err error) bool {
 		de  *DuplicateEvidenceError
 		ue  *UnknownEvidenceError
 		pe  *EvidencePayloadError
+		dk  *DuplicateEvidenceKindError
+		dm  *DuplicateMeasurementError
+		dfe *DuplicateFindingError
+		sce *StatusConsistencyError
 		uve *content.UsageValidationError
 	)
 	switch {
@@ -265,6 +269,10 @@ func isBareError(err error) bool {
 		errors.As(err, &de),
 		errors.As(err, &ue),
 		errors.As(err, &pe),
+		errors.As(err, &dk),
+		errors.As(err, &dm),
+		errors.As(err, &dfe),
+		errors.As(err, &sce),
 		errors.As(err, &uve):
 		return false
 	default:

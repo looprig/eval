@@ -111,6 +111,58 @@ func (e *DuplicateLabelError) Error() string {
 	return "eval: duplicate scenario label key"
 }
 
+// DuplicateEvidenceKindError reports that a Descriptor listed the same required
+// EvidenceKind more than once, which would make its requirement set ambiguous.
+// The offending kind is a package constant and therefore safe, but it is
+// withheld to keep the diagnostic vocabulary uniform.
+type DuplicateEvidenceKindError struct{}
+
+func (e *DuplicateEvidenceKindError) Error() string {
+	return "eval: duplicate required evidence kind in descriptor"
+}
+
+// DuplicateMeasurementError reports that an Assessment carried two measurements
+// with the same Name, which would corrupt comparison and aggregation. The
+// offending name is caller-supplied and withheld from the message.
+type DuplicateMeasurementError struct{}
+
+func (e *DuplicateMeasurementError) Error() string {
+	return "eval: duplicate measurement name in assessment"
+}
+
+// DuplicateFindingError reports that an Assessment carried two findings with the
+// same Code. Duplicate finding codes are forbidden within a single assessment:
+// a code identifies a distinct check, so a repeat would make the finding set
+// ambiguous. The offending code is caller-supplied and withheld from the
+// message.
+type DuplicateFindingError struct{}
+
+func (e *DuplicateFindingError) Error() string {
+	return "eval: duplicate finding code in assessment"
+}
+
+// StatusConsistencyError reports that an Assessment's declared Status was
+// inconsistent with its contents — for example a pass carrying a
+// high/critical-severity finding, or a non-verdict status (unverified, error,
+// skipped) carrying a quality measurement. Status is the assessment's own
+// validated status (a closed enum constant) and Reason is drawn only from the
+// fixed vocabulary below, so no untrusted content is embedded.
+type StatusConsistencyError struct {
+	// Status is the assessment's declared status.
+	Status AssessmentStatus
+	// Reason is one of the statusReason* constants.
+	Reason string
+}
+
+func (e *StatusConsistencyError) Error() string {
+	return "eval: status " + string(e.Status) + " inconsistent: " + e.Reason
+}
+
+const (
+	statusReasonPassSevereFinding       = "pass carries a high or critical severity finding"
+	statusReasonMeasurementOnNonVerdict = "non-verdict status carries a quality measurement"
+)
+
 // SampleSubjectMismatchError reports that a sample's observation described a
 // subject whose revision did not match the target revision the sample's scenario
 // declares. This is a stage error — the target produced an observation for the
