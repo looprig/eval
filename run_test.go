@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -273,6 +274,86 @@ func TestRunInvalidAssessmentIsContained(t *testing.T) {
 			// The raw invalid status must not have leaked through.
 			if as[0].Status == tt.invalid.Status && tt.invalid.Status != StatusError {
 				t.Fatalf("raw invalid verdict leaked into report: %q", as[0].Status)
+			}
+			// The sibling's completed assessment is unaffected.
+			if as[1].Status != StatusPass || as[1].Evaluator != "good" {
+				t.Fatalf("sibling assessment altered: %+v", as[1])
+			}
+			// Every assessment the runner emits must itself be valid.
+			for i, a := range as {
+				if verr := a.Validate(); verr != nil {
+					t.Fatalf("assessment[%d] emitted by Run is invalid: %v", i, verr)
+				}
+			}
+		})
+	}
+}
+
+func TestRunEvaluatorIdentityMismatchIsContained(t *testing.T) {
+	t.Parallel()
+	// A buggy/hostile evaluator returns a well-formed assessment stamped with
+	// ANOTHER evaluator's identity. Its own Assessment.Validate passes (Validate
+	// has no descriptor to compare against), so the runner must reject the
+	// mismatched identity itself: contain it as an evaluator-stage error under the
+	// DESCRIPTOR's identity, never let the masqueraded verdict or the wrong
+	// identity into the report, and leave the sibling untouched.
+	desc := stubDesc("exact/a") // Name exact/a, Revision v1
+	tests := []struct {
+		name     string
+		returned Assessment
+	}{
+		{
+			name:     "wrong name",
+			returned: Assessment{Evaluator: "exact/b", Revision: "v1", Status: StatusPass},
+		},
+		{
+			name:     "wrong revision",
+			returned: Assessment{Evaluator: "exact/a", Revision: "v2", Status: StatusPass},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// Sanity: the returned assessment is itself valid — only its identity is
+			// wrong, else the test would prove nothing (it would be caught as a plain
+			// invalid assessment instead).
+			if err := tt.returned.Validate(); err != nil {
+				t.Fatalf("fixture assessment unexpectedly invalid; test would be vacuous: %v", err)
+			}
+			masq := stubEvaluator{desc: desc, eval: func(context.Context, Sample) (Assessment, error) {
+				return tt.returned, nil
+			}}
+			report, err := Run(context.Background(), RunConfig{}, runSuite("s0"), okTarget(),
+				masq, passEvaluator("good"))
+			if err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			as := report.Samples[0].Assessments
+			if len(as) != 2 {
+				t.Fatalf("got %d assessments, want 2", len(as))
+			}
+			// Contained as an evaluator-stage error under the DESCRIPTOR's identity.
+			if as[0].Status != StatusError {
+				t.Fatalf("contained assessment status = %q, want error", as[0].Status)
+			}
+			if as[0].Evaluator != desc.Name || as[0].Revision != desc.Revision {
+				t.Fatalf("contained identity = %q@%q, want %q@%q", as[0].Evaluator, as[0].Revision, desc.Name, desc.Revision)
+			}
+			if len(as[0].Findings) != 1 || as[0].Findings[0].Code != FindingEvaluatorIdentityMismatch {
+				t.Fatalf("contained findings = %+v, want single %q", as[0].Findings, FindingEvaluatorIdentityMismatch)
+			}
+			// The masqueraded verdict (a pass) must never have reached the report.
+			if as[0].Status == StatusPass {
+				t.Fatalf("masqueraded verdict leaked into report")
+			}
+			// The attacker-chosen identity must not be echoed into the finding message.
+			for _, f := range as[0].Findings {
+				if strings.Contains(f.Message, string(tt.returned.Evaluator)) && string(tt.returned.Evaluator) != string(desc.Name) {
+					t.Fatalf("finding message echoed the attacker-chosen name: %q", f.Message)
+				}
+				if strings.Contains(f.Message, string(tt.returned.Revision)) && string(tt.returned.Revision) != string(desc.Revision) {
+					t.Fatalf("finding message echoed the attacker-chosen revision: %q", f.Message)
+				}
 			}
 			// The sibling's completed assessment is unaffected.
 			if as[1].Status != StatusPass || as[1].Evaluator != "good" {

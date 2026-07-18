@@ -416,6 +416,12 @@ func TestRequirePass(t *testing.T) {
 		{name: "error rejected", report: reportOf(sampleWith("s0", assessment("a", eval.StatusError))), wantFail: true},
 		{name: "target error rejected", report: reportOf(eval.SampleReport{ScenarioID: "s0", TargetErr: &eval.TargetError{Cause: errors.New("boom")}}), wantFail: true},
 		{name: "empty report rejected", report: reportOf(), wantFail: true},
+		// A report whose only assessments are skipped never reached a pass — an
+		// all-skipped report verified nothing and must not read as a pass.
+		{name: "skipped only rejected (no pass)", report: reportOf(sampleWith("s0", assessment("a", eval.StatusSkipped))), wantFail: true},
+		// A sample with a successful observation but zero assessments (e.g. no
+		// evaluators ran) verified nothing.
+		{name: "zero assessments rejected", report: reportOf(sampleWith("s0")), wantFail: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -445,6 +451,11 @@ func TestRequireVerified(t *testing.T) {
 		{name: "error rejected", report: reportOf(sampleWith("s0", assessment("a", eval.StatusError))), wantFail: true},
 		{name: "target error rejected", report: reportOf(eval.SampleReport{ScenarioID: "s0", TargetErr: &eval.TargetError{Cause: errors.New("boom")}}), wantFail: true},
 		{name: "empty report rejected", report: reportOf(), wantFail: true},
+		// A sample with a successful observation but zero assessments verified
+		// nothing — RequireVerified asserts coverage, so this must fail even though
+		// there is no failing verdict. (A single skipped assessment, by contrast, is
+		// an evaluator that ran and decided skip, and remains accepted above.)
+		{name: "zero assessments rejected", report: reportOf(sampleWith("s0")), wantFail: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -453,6 +464,36 @@ func TestRequireVerified(t *testing.T) {
 			RequireVerified(rec, tt.report)
 			if rec.failed() != tt.wantFail {
 				t.Fatalf("RequireVerified failed=%v, want %v (%v)", rec.failed(), tt.wantFail, rec.errLines())
+			}
+		})
+	}
+}
+
+// --- a run with no evaluators verifies nothing: both assertions fail ---
+
+func TestRequireNoEvaluatorsFailsBoth(t *testing.T) {
+	t.Parallel()
+	// A run with NO evaluators produces samples with a successful observation and
+	// zero assessments. Presentation itself must not fail (nothing errored), but
+	// both assertions must fail secure: nothing about these samples was verified.
+	rec := &recorder{}
+	report := Run(rec, testSuite("s0", "s1"), okTarget())
+	if rec.failed() {
+		t.Fatalf("Run itself must not fail on a no-evaluator report: %v", rec.errLines())
+	}
+	for _, tc := range []struct {
+		name   string
+		assert func(TB, eval.Report)
+	}{
+		{name: "RequirePass", assert: RequirePass},
+		{name: "RequireVerified", assert: RequireVerified},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := &recorder{}
+			tc.assert(r, report)
+			if !r.failed() {
+				t.Fatalf("%s did not fail a no-evaluators report", tc.name)
 			}
 		})
 	}

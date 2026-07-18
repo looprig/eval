@@ -27,6 +27,13 @@ type Sink interface {
 // Provenance are intentionally minimal here; richer reporting is layered on in a
 // later task rather than baked into the runner.
 
+// MaxReportIDBytes bounds a Report.ID in UTF-8 bytes. The runner derives its ID
+// from the suite identity (Name "@" Revision, each bounded by MaxNameBytes /
+// MaxRevisionBytes), and a caller may overwrite it with a globally unique run ID;
+// this bound is generous enough for both while still rejecting an absurd or
+// hostile value at the untrusted decode boundary.
+const MaxReportIDBytes = 1024
+
 // Report is the complete result of one Run: the samples in deterministic order,
 // a minimal status summary, and the provenance needed to interpret and compare
 // it. ID is a deterministic identifier derived from the suite (see
@@ -43,6 +50,156 @@ type Report struct {
 	Samples    []SampleReport
 	Summary    Summary
 	Provenance Provenance
+}
+
+// Validate reports whether r satisfies the report-level invariants. It is the
+// whole-report boundary check applied to an untrusted, reconstructed report (the
+// codec calls it after decoding) and is also satisfied by every report the runner
+// itself produces. It enforces, in order:
+//
+//   - Identity: ID is non-empty and within MaxReportIDBytes. Suite and Target are
+//     validated only when present — an all-target-failed run legitimately records
+//     an empty observed Target revision.
+//   - Timestamps: when both StartedAt and EndedAt are set, EndedAt is not before
+//     StartedAt. Zero timestamps are permitted (the runner may leave them unset).
+//   - Samples: every TrialIndex is non-negative, the (ScenarioID, TrialIndex)
+//     identity is unique across samples, and within each sample no two assessments
+//     share an (Evaluator, Revision) identity. Each contained Assessment is itself
+//     valid.
+//   - Summary: the stored Summary agrees with the samples (recomputed via
+//     summarize) — same sample count, target-error count, and per-status tally.
+//   - Provenance: every recorded revision is well-formed (Suite/Target validated
+//     when present; each evaluator's Name and Revision required).
+//
+// Diagnostics never echo a data-supplied value (a scenario ID is untrusted); a
+// structural failure is reported as a ReportValidationError carrying only a
+// fixed-vocabulary reason, and a contained-part failure surfaces that part's own
+// typed, content-free validation error.
+func (r Report) Validate() error {
+	if r.ID == "" {
+		return &ReportValidationError{Reason: reportReasonEmptyID}
+	}
+	if len(r.ID) > MaxReportIDBytes {
+		return &ReportValidationError{Reason: reportReasonIDTooLong}
+	}
+	if err := validateOptionalRevision(r.Suite); err != nil {
+		return err
+	}
+	if err := validateOptionalRevision(r.Target); err != nil {
+		return err
+	}
+	if !r.StartedAt.IsZero() && !r.EndedAt.IsZero() && r.EndedAt.Before(r.StartedAt) {
+		return &ReportValidationError{Reason: reportReasonEndBeforeStart}
+	}
+	if err := r.validateSamples(); err != nil {
+		return err
+	}
+	if !summaryConsistent(r.Summary, summarize(r.Samples)) {
+		return &ReportValidationError{Reason: reportReasonSummaryMismatch}
+	}
+	return r.Provenance.validate()
+}
+
+// validateSamples enforces the per-sample invariants: non-negative trial index,
+// unique (ScenarioID, TrialIndex) identity across samples, unique evaluator
+// identity within each sample, and a valid contained Assessment for every entry.
+func (r Report) validateSamples() error {
+	type sampleKey struct {
+		scenario string
+		trial    int
+	}
+	seen := make(map[sampleKey]struct{}, len(r.Samples))
+	for i := range r.Samples {
+		s := r.Samples[i]
+		if s.TrialIndex < 0 {
+			return &ReportValidationError{Reason: reportReasonNegativeTrial}
+		}
+		key := sampleKey{scenario: s.ScenarioID, trial: s.TrialIndex}
+		if _, dup := seen[key]; dup {
+			return &ReportValidationError{Reason: reportReasonDuplicateSample}
+		}
+		seen[key] = struct{}{}
+		if err := validateSampleAssessments(s.Assessments); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// evaluatorKey is one assessment's identity, used to reject duplicates within a
+// single sample (which would corrupt cross-evaluator comparison).
+type evaluatorKey struct {
+	name     Name
+	revision Revision
+}
+
+// validateSampleAssessments validates each assessment in a sample and rejects a
+// repeated (Evaluator, Revision) identity within that sample.
+func validateSampleAssessments(assessments []Assessment) error {
+	seen := make(map[evaluatorKey]struct{}, len(assessments))
+	for _, a := range assessments {
+		if err := a.Validate(); err != nil {
+			return err
+		}
+		key := evaluatorKey{name: a.Evaluator, revision: a.Revision}
+		if _, dup := seen[key]; dup {
+			return &ReportValidationError{Reason: reportReasonDuplicateEvaluator}
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+// validate reports whether every revision the provenance records is well-formed.
+// Suite and Target are validated only when present (an all-failed run records an
+// empty observed Target); each evaluator's Name and Revision are required.
+func (p Provenance) validate() error {
+	if err := validateOptionalRevision(p.Suite); err != nil {
+		return err
+	}
+	if err := validateOptionalRevision(p.Target); err != nil {
+		return err
+	}
+	for _, e := range p.Evaluators {
+		if err := e.Name.Validate(); err != nil {
+			return err
+		}
+		if err := e.Revision.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateOptionalRevision validates a revision that may legitimately be empty
+// (the observed Target revision is empty when every sample failed at the target
+// stage). A non-empty value must be a well-formed Revision.
+func validateOptionalRevision(rev Revision) error {
+	if rev == "" {
+		return nil
+	}
+	return rev.Validate()
+}
+
+// summaryConsistent reports whether a stored Summary agrees with the recomputed
+// one: identical sample and target-error counts and identical per-status tallies.
+// It compares status counts by value so a nil map and an empty map (and an absent
+// key versus a zero-valued key) are treated as equal.
+func summaryConsistent(stored, want Summary) bool {
+	if stored.Samples != want.Samples || stored.TargetErrors != want.TargetErrors {
+		return false
+	}
+	for st, n := range want.Assessments {
+		if stored.Assessments[st] != n {
+			return false
+		}
+	}
+	for st, n := range stored.Assessments {
+		if want.Assessments[st] != n {
+			return false
+		}
+	}
+	return true
 }
 
 // SampleReport is the result of one (scenario, trial) sample. ScenarioID and

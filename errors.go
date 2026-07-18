@@ -211,6 +211,30 @@ func (e *TargetError) Unwrap() error {
 	return e.Cause
 }
 
+// ReportValidationError reports that a Report failed a report-level invariant
+// (identity, timestamp ordering, trial index, sample or evaluator uniqueness, or
+// summary consistency). Reason is drawn only from the fixed vocabulary below, so
+// no untrusted content — in particular a data-supplied scenario ID — is ever
+// embedded; only the class of failure is reported.
+type ReportValidationError struct {
+	// Reason is one of the reportReason* constants.
+	Reason string
+}
+
+func (e *ReportValidationError) Error() string {
+	return "eval: invalid report: " + e.Reason
+}
+
+const (
+	reportReasonEmptyID            = "id must not be empty"
+	reportReasonIDTooLong          = "id exceeds the length bound"
+	reportReasonEndBeforeStart     = "ended_at is before started_at"
+	reportReasonNegativeTrial      = "sample trial index must not be negative"
+	reportReasonDuplicateSample    = "duplicate sample identity (scenario id and trial index)"
+	reportReasonDuplicateEvaluator = "duplicate evaluator identity within a sample"
+	reportReasonSummaryMismatch    = "summary is inconsistent with the samples"
+)
+
 // SampleSubjectMismatchError reports that a sample's observation described a
 // subject whose revision did not match the target revision the sample's scenario
 // declares. This is a stage error — the target produced an observation for the

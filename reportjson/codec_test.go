@@ -395,6 +395,133 @@ func TestDecodeRejects(t *testing.T) {
 	}
 }
 
+// TestDecodeRejectsInvalidReport confirms Decode enforces the whole-report
+// invariants, not just per-assessment validity: a report whose parts each decode
+// but which is internally contradictory is rejected as an InvalidReportError.
+func TestDecodeRejectsInvalidReport(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(r *eval.Report)
+	}{
+		{
+			name:   "ended before started",
+			mutate: func(r *eval.Report) { r.EndedAt = r.StartedAt.Add(-time.Hour) },
+		},
+		{
+			name:   "negative trial index",
+			mutate: func(r *eval.Report) { r.Samples[0].TrialIndex = -1 },
+		},
+		{
+			name: "duplicate sample identity",
+			mutate: func(r *eval.Report) {
+				r.Samples = append(r.Samples, r.Samples[0])
+				r.Summary.Samples = 2
+			},
+		},
+		{
+			name: "duplicate evaluator within sample",
+			mutate: func(r *eval.Report) {
+				r.Samples[0].Assessments = append(r.Samples[0].Assessments, passWith("exact", "1", measure("score", 1, eval.UnitRatio)))
+				r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusPass: 2}
+			},
+		},
+		{
+			name:   "summary count disagrees with assessments",
+			mutate: func(r *eval.Report) { r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusFail: 1} },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := baseReport()
+			tt.mutate(&r)
+			enc, err := reportjson.Encode(r)
+			if err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+			_, err = reportjson.Decode(enc)
+			var ire *reportjson.InvalidReportError
+			if !errors.As(err, &ire) {
+				t.Fatalf("Decode: got %v, want *InvalidReportError", err)
+			}
+			var rve *eval.ReportValidationError
+			var ve *eval.ValidationError
+			if !errors.As(err, &rve) && !errors.As(err, &ve) {
+				t.Fatalf("wrapped cause not a typed eval validation error: %v", err)
+			}
+		})
+	}
+}
+
+// TestDecodeGenuineRunRoundTrips confirms a real Run report survives
+// Encode→Decode: it decodes without error (which means it passed the report-level
+// validation the decoder now enforces), proving Report.Validate is aligned with
+// the runner's real output.
+func TestDecodeGenuineRunRoundTrips(t *testing.T) {
+	t.Parallel()
+	suite := eval.Suite{
+		Name:     eval.Name("smoke"),
+		Revision: eval.Revision("suite-v1"),
+		Scenarios: []eval.Scenario{
+			{ID: "a", Name: eval.Name("agent"), Revision: eval.Revision("r1"), Input: userInput("prompt a")},
+			{ID: "b", Name: eval.Name("agent"), Revision: eval.Revision("r1"), Input: userInput("prompt b")},
+		},
+	}
+	report, err := eval.Run(context.Background(), eval.RunConfig{}, suite, roundTripTarget{}, roundTripEvaluator{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if verr := report.Validate(); verr != nil {
+		t.Fatalf("runner report failed Validate before encode: %v", verr)
+	}
+	enc, err := reportjson.Encode(report)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	dec, err := reportjson.Decode(enc)
+	if err != nil {
+		t.Fatalf("Decode of genuine run report failed validation: %v", err)
+	}
+	if dec.ID != report.ID {
+		t.Fatalf("decoded id = %q, want %q", dec.ID, report.ID)
+	}
+}
+
+// userInput builds a minimal valid scenario input.
+func userInput(text string) content.AgenticMessages {
+	return content.AgenticMessages{
+		&content.UserMessage{Message: content.Message{
+			Role:   content.RoleUser,
+			Blocks: []content.Block{&content.TextBlock{Text: text}},
+		}},
+	}
+}
+
+// roundTripTarget is a minimal Target returning a fixed valid observation.
+type roundTripTarget struct{}
+
+func (roundTripTarget) Name() string { return "rt" }
+
+func (roundTripTarget) Observe(context.Context, eval.Scenario) (eval.Observation, error) {
+	return eval.Observation{
+		Scope:   eval.ScopeCase,
+		Subject: eval.Subject{ID: "subj", Kind: eval.SubjectModel, Name: eval.Name("agent"), Revision: eval.Revision("r1")},
+	}, nil
+}
+
+// roundTripEvaluator is a minimal Evaluator returning a passing assessment.
+type roundTripEvaluator struct{}
+
+func (roundTripEvaluator) Descriptor() eval.Descriptor {
+	return eval.Descriptor{Name: eval.Name("q"), Revision: eval.Revision("v1"), Method: eval.MethodProgrammatic}
+}
+
+func (e roundTripEvaluator) Evaluate(context.Context, eval.Sample) (eval.Assessment, error) {
+	return eval.Pass(e.Descriptor(), measure("score", 1, eval.UnitRatio)), nil
+}
+
 func TestDecodePreservesTargetErrorClass(t *testing.T) {
 	t.Parallel()
 

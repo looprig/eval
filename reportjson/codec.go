@@ -368,8 +368,10 @@ func classifyTargetError(te *eval.TargetError) TargetErrorClass {
 // the untrusted boundary and the fuzz target: for any input it returns either a
 // valid redacted report or a typed error, and never panics. Enforced in order:
 // the size bound, valid UTF-8, exactly one JSON value (no trailing data), a known
-// version, strict field decoding, finite measurement values, and domain
-// validation of every reconstructed assessment.
+// version, strict field decoding, finite measurement values, domain validation of
+// every reconstructed assessment, and finally the whole-report invariants via
+// eval.Report.Validate (identity, timestamp ordering, trial indexes, sample and
+// evaluator uniqueness, and summary/provenance consistency).
 func Decode(data []byte) (eval.Report, error) {
 	var zero eval.Report
 
@@ -401,7 +403,19 @@ func Decode(data []byte) (eval.Report, error) {
 	if err != nil {
 		return zero, err
 	}
-	return reconstruct(rj)
+	report, err := reconstruct(rj)
+	if err != nil {
+		return zero, err
+	}
+	// Whole-report invariants, after every part is individually reconstructed and
+	// validated: report identity, timestamp ordering, trial indexes, sample and
+	// evaluator uniqueness, and summary/provenance consistency. A report whose
+	// parts each validate can still be internally contradictory; reject it here so
+	// the decode boundary never yields an inconsistent report.
+	if err := report.Validate(); err != nil {
+		return zero, &InvalidReportError{Cause: err}
+	}
+	return report, nil
 }
 
 // decodeReportPayload strictly decodes the deferred report payload, rejecting any
