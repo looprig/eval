@@ -28,6 +28,17 @@ Tie Target presence to the samples:
 - the existing provenance equality check continues to require
   `Provenance.Target == Report.Target`.
 
+Complete the remaining runner-shaped identities as well:
+
+- `Report.ID` must be valid UTF-8 in addition to its existing non-empty and
+  byte-length requirements, preventing JSON replacement from changing or
+  collapsing malformed identities;
+- every successful sample must carry exactly the evaluator identity set in
+  provenance, because `Run` records one assessment per configured evaluator
+  even when the evaluator errors or cannot verify the sample;
+- provenance-only evaluator identities remain valid when no sample succeeded,
+  because target failure or cancellation can prevent every assessment.
+
 All new failures remain typed and content-free. Identifier/revision shape
 failures use the existing `ValidationError` vocabulary; cross-field Target
 presence contradictions use `ReportValidationError` with fixed reasons. Neither
@@ -49,5 +60,7 @@ Add table-driven parallel tests proving root validation rejects overlong and
 invalid-UTF-8 scenario IDs, an empty Suite, a successful sample with an empty
 Target, and an all-target-failed report with a non-empty Target. Extend decoder
 tests for the serialized forms and Compare tests for both baseline and candidate
-wrapping. Confirm genuine runner outputs, including all-target-failed and
-cancelled/empty-sample reports, still validate.
+wrapping. Add regressions for malformed Report IDs and a report-wide evaluator
+union that masks an evaluator missing from one successful sample. Confirm genuine
+runner outputs, including all-target-failed and cancelled/empty-sample reports,
+still validate.

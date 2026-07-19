@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"time"
+	"unicode/utf8"
 )
 
 // Sink is the destination contract for a completed Report. It is the core
@@ -57,25 +58,28 @@ type Report struct {
 // codec calls it after decoding) and is also satisfied by every report the runner
 // itself produces. It enforces, in order:
 //
-//   - Identity: ID is non-empty and within MaxReportIDBytes; Suite is a required
-//     valid revision; Target is valid when present and is present exactly when at
-//     least one sample reached the target successfully. An all-target-failed or
-//     fully cancelled run legitimately records an empty observed Target revision.
+//   - Identity: ID is non-empty, valid UTF-8, and within MaxReportIDBytes; Suite
+//     is a required valid revision; Target is valid when present and is present
+//     exactly when at least one sample reached the target successfully. An
+//     all-target-failed or fully cancelled run legitimately records an empty
+//     observed Target revision.
 //   - Timestamps: when both StartedAt and EndedAt are set, EndedAt is not before
 //     StartedAt. Zero timestamps are permitted (the runner may leave them unset).
-//   - Samples: every ScenarioID is non-empty, every TrialIndex is non-negative, the
-//     (ScenarioID, TrialIndex) identity is unique across samples, and within each
-//     sample no two assessments share an evaluator NAME (a name identifies exactly
-//     one evaluator, so a repeat is rejected even when the revisions differ). Each
-//     contained Assessment is itself valid.
+//   - Samples: every ScenarioID is non-empty, valid UTF-8, and within MaxIDBytes;
+//     every TrialIndex is non-negative; the (ScenarioID, TrialIndex) identity is
+//     unique across samples; and within each sample no two assessments share an
+//     evaluator NAME (a name identifies exactly one evaluator, so a repeat is
+//     rejected even when the revisions differ). Each contained Assessment is
+//     itself valid.
 //   - Evaluator revision consistency: report-wide, an evaluator name maps to
 //     exactly one revision — the same name carrying two different revisions across
 //     samples (revision drift) is rejected.
 //   - Summary: the stored Summary agrees with the samples (recomputed via
 //     summarize) — same sample count, target-error count, and per-status tally.
-//   - Provenance: every recorded revision is well-formed (Suite/Target validated
-//     when present; each evaluator's Name and Revision required) and no evaluator
-//     name is repeated.
+//   - Provenance: Suite is required and well-formed; Target is well-formed when
+//     present; each evaluator's Name and Revision is required; no evaluator name
+//     is repeated; and every successful sample carries exactly the declared
+//     evaluator identity set.
 //
 // Diagnostics never echo a data-supplied value (a scenario ID is untrusted); a
 // structural failure is reported as a ReportValidationError carrying only a
@@ -87,6 +91,9 @@ func (r Report) Validate() error {
 	}
 	if len(r.ID) > MaxReportIDBytes {
 		return &ReportValidationError{Reason: reportReasonIDTooLong}
+	}
+	if !utf8.ValidString(r.ID) {
+		return &ReportValidationError{Reason: reportReasonIDInvalidUTF8}
 	}
 	if err := r.Suite.Validate(); err != nil {
 		return err
@@ -125,16 +132,13 @@ func (r Report) Validate() error {
 //   - Provenance.Suite and Provenance.Target equal the report's Suite and Target.
 //     The runner sources both from the same values, including the empty observed
 //     Target of an all-target-failed run, so the equality holds for real reports.
-//   - Every distinct (Evaluator, Revision) identity that appears in an assessment
-//     is declared in Provenance: an assessed evaluator absent from provenance is a
-//     contradiction.
-//   - When at least one evaluator reached the assessment stage, the runner runs
-//     every supplied evaluator on every successful sample, so the declared set must
-//     equal the assessed set — a provenance evaluator absent from a NON-EMPTY body
-//     is a phantom. When the body carries no assessments at all (every sample
-//     failed at the target stage, or no evaluators were supplied) the runner still
-//     records the supplied evaluators in provenance, so that legitimate asymmetry is
-//     allowed rather than rejected.
+//   - Every successful sample carries exactly the evaluator identity set declared
+//     by Provenance. The runner invokes every configured evaluator for every
+//     successful sample and records an assessment even when that evaluator errors
+//     or cannot verify the sample, so a missing or extra identity is contradictory.
+//   - When no sample reached the target successfully, the runner may still record
+//     its configured evaluators in Provenance even though target errors prevented
+//     every assessment. That legitimate provenance-only shape remains valid.
 //
 // Diagnostics carry only the fixed reason; no data-supplied identity is echoed.
 func (r Report) validateProvenanceConsistency() error {
@@ -147,21 +151,19 @@ func (r Report) validateProvenanceConsistency() error {
 		provSet[evaluatorKey{name: e.Name, revision: e.Revision}] = struct{}{}
 	}
 
-	bodySet := make(map[evaluatorKey]struct{})
 	for i := range r.Samples {
-		for _, a := range r.Samples[i].Assessments {
-			bodySet[evaluatorKey{name: a.Evaluator, revision: a.Revision}] = struct{}{}
+		if r.Samples[i].TargetErr != nil {
+			continue
 		}
-	}
-
-	for k := range bodySet {
-		if _, ok := provSet[k]; !ok {
+		sampleSet := make(map[evaluatorKey]struct{}, len(r.Samples[i].Assessments))
+		for _, a := range r.Samples[i].Assessments {
+			sampleSet[evaluatorKey{name: a.Evaluator, revision: a.Revision}] = struct{}{}
+		}
+		if len(sampleSet) != len(provSet) {
 			return &ReportValidationError{Reason: reportReasonProvenanceMismatch}
 		}
-	}
-	if len(bodySet) > 0 {
 		for k := range provSet {
-			if _, ok := bodySet[k]; !ok {
+			if _, ok := sampleSet[k]; !ok {
 				return &ReportValidationError{Reason: reportReasonProvenanceMismatch}
 			}
 		}

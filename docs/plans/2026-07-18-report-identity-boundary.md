@@ -113,3 +113,30 @@ million executions.
 Run: `git diff --check && git status --short && git diff --stat d2e8df4..HEAD`
 
 Expected: only the planned validation, tests, and planning documents changed.
+
+### Task 5: Close independent-review identity gaps
+
+**Files:**
+- Modify: `errors.go`
+- Modify: `report.go`
+- Modify: `report_test.go`
+- Modify: `reportjson/codec_test.go`
+- Modify: `compare/compare_test.go`
+
+**Step 1: Pin the failures**
+
+Add regressions proving malformed UTF-8 Report IDs and per-successful-sample
+evaluator omissions currently pass root validation and Compare; add the evaluator
+omission at the decoder boundary as well.
+
+**Step 2: Enforce the runner contract**
+
+Reject malformed Report IDs with a fixed `ReportValidationError` reason. Replace
+the report-wide evaluator-union comparison with an exact identity-set comparison
+for every successful sample, while allowing provenance-only evaluators when no
+sample succeeded.
+
+**Step 3: Cover cancellation and rerun release verification**
+
+Confirm a cancelled-before-start runner report passes `Report.Validate`, update
+the validator documentation, and repeat every Task 4 gate.

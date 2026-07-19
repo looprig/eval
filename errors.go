@@ -243,6 +243,7 @@ func (e *ReportValidationError) Error() string {
 const (
 	reportReasonEmptyID            = "id must not be empty"
 	reportReasonIDTooLong          = "id exceeds the length bound"
+	reportReasonIDInvalidUTF8      = "report id must be valid UTF-8"
 	reportReasonEndBeforeStart     = "ended_at is before started_at"
 	reportReasonEmptyScenarioID    = "sample scenario id must not be empty"
 	reportReasonNegativeTrial      = "sample trial index must not be negative"

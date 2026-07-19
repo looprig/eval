@@ -50,6 +50,7 @@ func TestReportValidate(t *testing.T) {
 		{name: "valid baseline", mutate: func(*Report) {}, wantErr: false},
 		{name: "empty id", mutate: func(r *Report) { r.ID = "" }, wantErr: true, wantReason: reportReasonEmptyID},
 		{name: "oversize id", mutate: func(r *Report) { r.ID = strings.Repeat("x", MaxReportIDBytes+1) }, wantErr: true, wantReason: reportReasonIDTooLong},
+		{name: "invalid utf8 id", mutate: func(r *Report) { r.ID = string([]byte{0xff}) }, wantErr: true, wantReason: reportReasonIDInvalidUTF8},
 		{name: "zero timestamps allowed", mutate: func(r *Report) { r.StartedAt = time.Time{}; r.EndedAt = time.Time{} }, wantErr: false},
 		{
 			name: "empty target allowed when every target failed",
@@ -195,6 +196,25 @@ func TestReportValidate(t *testing.T) {
 			wantReason: reportReasonProvenanceMismatch,
 		},
 		{
+			// The report-wide evaluator union matches provenance, but the first
+			// successful sample omits evaluator r. A real Run emits one assessment per
+			// configured evaluator for every successful sample.
+			name: "successful sample evaluator set differs from provenance",
+			mutate: func(r *Report) {
+				rDesc := Descriptor{Name: "r", Revision: "v1", Method: MethodProgrammatic}
+				r.Samples = append(r.Samples, SampleReport{
+					ScenarioID:  "s1",
+					TrialIndex:  0,
+					Observation: runObservation(),
+					Assessments: []Assessment{Pass(stubDesc("q")), Pass(rDesc)},
+				})
+				r.Summary = summarize(r.Samples)
+				r.Provenance.Evaluators = append(r.Provenance.Evaluators, EvaluatorRevision{Name: "r", Revision: "v1"})
+			},
+			wantErr:    true,
+			wantReason: reportReasonProvenanceMismatch,
+		},
+		{
 			// An assessed evaluator absent from provenance (and provenance carrying a
 			// different identity entirely) is a contradiction in both directions.
 			name:       "provenance evaluator set differs from the assessed set",
@@ -273,5 +293,19 @@ func TestRunReportValidates(t *testing.T) {
 				t.Fatalf("runner report failed Report.Validate: %v", verr)
 			}
 		})
+	}
+}
+
+func TestCancelledRunReportValidates(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	report, err := Run(ctx, RunConfig{}, runSuite("a"), okTarget(), passEvaluator("q"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+	if verr := report.Validate(); verr != nil {
+		t.Fatalf("cancelled runner report failed Report.Validate: %v", verr)
 	}
 }

@@ -327,6 +327,18 @@ func TestCompareRejectsInvalidInput(t *testing.T) {
 		r.Provenance.Target = ""
 		return r
 	}
+	invalidReportID := func() eval.Report {
+		r := report(sample("s1", 0, eval.Pass(desc("e", "1"))))
+		r.ID = string([]byte{0xff})
+		return r
+	}
+	incompleteSampleEvaluators := func() eval.Report {
+		r := report(
+			sample("s1", 0, eval.Pass(desc("e", "1"))),
+			sample("s2", 0, eval.Pass(desc("e", "1")), eval.Pass(desc("judge", "1"))),
+		)
+		return r
+	}
 	valid := report(sample("s1", 0, eval.Pass(desc("e", "1"))))
 
 	tests := []struct {
@@ -378,6 +390,20 @@ func TestCompareRejectsInvalidInput(t *testing.T) {
 			candidate:  missingTarget(),
 			wantSide:   compare.SideCandidate,
 			wantReason: "successful sample requires an observed target revision",
+		},
+		{
+			name:       "invalid baseline malformed report id",
+			baseline:   invalidReportID(),
+			candidate:  valid,
+			wantSide:   compare.SideBaseline,
+			wantReason: "report id must be valid UTF-8",
+		},
+		{
+			name:       "invalid candidate incomplete sample evaluator set",
+			baseline:   valid,
+			candidate:  incompleteSampleEvaluators(),
+			wantSide:   compare.SideCandidate,
+			wantReason: "provenance is inconsistent with the report body",
 		},
 	}
 	for _, tt := range tests {

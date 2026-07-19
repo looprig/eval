@@ -538,6 +538,23 @@ func TestDecodeRejectsInvalidReport(t *testing.T) {
 				r.Provenance.Evaluators = []eval.EvaluatorRevision{{Name: eval.Name("phantom"), Revision: eval.Revision("9")}}
 			},
 		},
+		{
+			name: "successful sample omits a provenance evaluator",
+			mutate: func(r *eval.Report) {
+				r.Samples = append(r.Samples, eval.SampleReport{
+					ScenarioID: "s2",
+					Assessments: []eval.Assessment{
+						passWith("exact", "1", measure("score", 1, eval.UnitRatio)),
+						passWith("judge", "1"),
+					},
+				})
+				r.Summary.Samples = 2
+				r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusPass: 3}
+				r.Provenance.Evaluators = append(r.Provenance.Evaluators, eval.EvaluatorRevision{
+					Name: eval.Name("judge"), Revision: eval.Revision("1"),
+				})
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
