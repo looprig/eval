@@ -176,8 +176,8 @@ type Sink interface {
 `reportjson` implements the redacted `report/v1` wire form:
 
 - `reportjson.Encode(report) ([]byte, error)` / `reportjson.Decode(data) (eval.Report, error)`
-  — the versioned codec (raw conversation text, judge explanations, and secrets
-  are redacted on the wire).
+  — the versioned codec; both directions enforce `Report.Validate`, and raw
+  conversation text, judge explanations, and secrets are redacted on the wire.
 - `reportjson.NewFileSink(dir)` — an `eval.Sink` that writes each report
   atomically to `<dir>/<id>.json`, directory-scoped via `os.Root` so a report ID
   cannot escape the root.

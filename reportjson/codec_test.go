@@ -3,6 +3,7 @@ package reportjson_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"os"
@@ -91,6 +92,39 @@ func baseReport() eval.Report {
 			},
 		},
 	}
+}
+
+type wireObject map[string]any
+
+func validWireEnvelope(t *testing.T) wireObject {
+	t.Helper()
+	b, err := reportjson.Encode(baseReport())
+	if err != nil {
+		t.Fatalf("Encode valid wire fixture: %v", err)
+	}
+	var env wireObject
+	if err := json.Unmarshal(b, &env); err != nil {
+		t.Fatalf("Unmarshal valid wire fixture: %v", err)
+	}
+	return env
+}
+
+func wireObjectField(t *testing.T, obj wireObject, field string) wireObject {
+	t.Helper()
+	v, ok := obj[field].(map[string]any)
+	if !ok {
+		t.Fatalf("wire field %q = %T, want object", field, obj[field])
+	}
+	return wireObject(v)
+}
+
+func wireArrayField(t *testing.T, obj wireObject, field string) []any {
+	t.Helper()
+	v, ok := obj[field].([]any)
+	if !ok {
+		t.Fatalf("wire field %q = %T, want array", field, obj[field])
+	}
+	return v
 }
 
 // --- round trip -------------------------------------------------------------
@@ -232,25 +266,37 @@ func TestDeterministicOrdering(t *testing.T) {
 	sorted.Samples = []eval.SampleReport{
 		{ScenarioID: "s1", TrialIndex: 0, Observation: convObservation("a"), Assessments: []eval.Assessment{
 			passWith("aa", "1", measure("alpha", 1, eval.UnitRatio), measure("beta", 2, eval.UnitCount)),
+			passWith("bb", "1"),
 		}},
 		{ScenarioID: "s2", TrialIndex: 0, Observation: convObservation("b"), Assessments: []eval.Assessment{
+			passWith("aa", "1"),
 			passWith("bb", "1"),
 		}},
 	}
 	sorted.Summary.Samples = 2
-	sorted.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusPass: 2}
+	sorted.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusPass: 4}
+	sorted.Provenance.Evaluators = []eval.EvaluatorRevision{
+		{Name: eval.Name("aa"), Revision: eval.Revision("1")},
+		{Name: eval.Name("bb"), Revision: eval.Revision("1")},
+	}
 
 	scrambled := baseReport()
 	scrambled.Samples = []eval.SampleReport{
 		{ScenarioID: "s2", TrialIndex: 0, Observation: convObservation("b"), Assessments: []eval.Assessment{
 			passWith("bb", "1"),
+			passWith("aa", "1"),
 		}},
 		{ScenarioID: "s1", TrialIndex: 0, Observation: convObservation("a"), Assessments: []eval.Assessment{
+			passWith("bb", "1"),
 			passWith("aa", "1", measure("beta", 2, eval.UnitCount), measure("alpha", 1, eval.UnitRatio)),
 		}},
 	}
 	scrambled.Summary.Samples = 2
-	scrambled.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusPass: 2}
+	scrambled.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusPass: 4}
+	scrambled.Provenance.Evaluators = []eval.EvaluatorRevision{
+		{Name: eval.Name("aa"), Revision: eval.Revision("1")},
+		{Name: eval.Name("bb"), Revision: eval.Revision("1")},
+	}
 
 	a, err := reportjson.Encode(sorted)
 	if err != nil {
@@ -265,53 +311,21 @@ func TestDeterministicOrdering(t *testing.T) {
 	}
 }
 
-func TestEncodeTotalOrderTiebreak(t *testing.T) {
+func TestEncodeRejectsDuplicateEvaluatorIdentity(t *testing.T) {
 	t.Parallel()
 
-	// Two assessments in ONE sample share the same (Evaluator, Revision) but
-	// differ in status and measurements. Without a total-order tiebreaker their
-	// relative order would depend on input order, breaking byte-stability.
-	build := func(swap bool) eval.Report {
-		a1 := eval.Assessment{
-			Evaluator: eval.Name("dup"), Revision: eval.Revision("1"),
-			Status:       eval.StatusPass,
-			Measurements: []eval.Measurement{measure("score", 1, eval.UnitRatio)},
-		}
-		a2 := eval.Assessment{
-			Evaluator: eval.Name("dup"), Revision: eval.Revision("1"),
-			Status:       eval.StatusFail,
-			Measurements: []eval.Measurement{measure("score", 0, eval.UnitRatio)},
-		}
-		as := []eval.Assessment{a1, a2}
-		if swap {
-			as = []eval.Assessment{a2, a1}
-		}
-		r := baseReport()
-		r.Samples[0].Assessments = as
-		r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusPass: 1, eval.StatusFail: 1}
-		return r
-	}
+	r := baseReport()
+	r.Samples[0].Assessments = append(r.Samples[0].Assessments, passWith("exact", "1"))
+	r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusPass: 2}
 
-	forward, err := reportjson.Encode(build(false))
-	if err != nil {
-		t.Fatalf("Encode forward: %v", err)
+	_, err := reportjson.Encode(r)
+	var ee *reportjson.EncodeError
+	if !errors.As(err, &ee) {
+		t.Fatalf("Encode: got %v, want *EncodeError", err)
 	}
-	// Repeated encode of the same input is byte-identical.
-	again, err := reportjson.Encode(build(false))
-	if err != nil {
-		t.Fatalf("Encode again: %v", err)
-	}
-	if !bytes.Equal(forward, again) {
-		t.Fatalf("repeated encode not byte-identical:\n first=%s\n second=%s", forward, again)
-	}
-	// A shuffled input order encodes to identical bytes: the collision on
-	// (Evaluator, Revision) is broken deterministically by content.
-	shuffled, err := reportjson.Encode(build(true))
-	if err != nil {
-		t.Fatalf("Encode shuffled: %v", err)
-	}
-	if !bytes.Equal(forward, shuffled) {
-		t.Fatalf("encoding depends on input order:\n forward=%s\n shuffled=%s", forward, shuffled)
+	var rve *eval.ReportValidationError
+	if !errors.As(err, &rve) {
+		t.Fatalf("Encode cause: got %v, want *eval.ReportValidationError", err)
 	}
 }
 
@@ -338,6 +352,7 @@ func TestRedaction(t *testing.T) {
 	r.Summary.Samples = 2
 	r.Summary.TargetErrors = 1
 	r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusFail: 1}
+	r.Provenance.Evaluators = []eval.EvaluatorRevision{{Name: eval.Name("judge"), Revision: eval.Revision("1")}}
 
 	enc, err := reportjson.Encode(r)
 	if err != nil {
@@ -372,6 +387,22 @@ func TestEncodeRejectsNonFinite(t *testing.T) {
 		if !errors.As(err, &nfe) {
 			t.Fatalf("value %v: got err %v, want *NonFiniteValueError", v, err)
 		}
+	}
+}
+
+func TestEncodeRejectsInvalidReport(t *testing.T) {
+	t.Parallel()
+	r := baseReport()
+	r.ID = string([]byte{'r', 0xff})
+
+	_, err := reportjson.Encode(r)
+	var ee *reportjson.EncodeError
+	if !errors.As(err, &ee) {
+		t.Fatalf("Encode: got %v, want *EncodeError", err)
+	}
+	var rve *eval.ReportValidationError
+	if !errors.As(err, &rve) {
+		t.Fatalf("Encode cause: got %v, want *eval.ReportValidationError", err)
 	}
 }
 
@@ -430,10 +461,10 @@ func TestDecodeRejects(t *testing.T) {
 	}
 }
 
-// TestDecodeRejectsInvalidReport confirms Decode enforces the whole-report
-// invariants, not just per-assessment validity: a report whose parts each decode
-// but which is internally contradictory is rejected as an InvalidReportError.
-func TestDecodeRejectsInvalidReport(t *testing.T) {
+// TestEncodeRejectsInvalidReportBoundary confirms Encode refuses reports that
+// violate root whole-report invariants before JSON serialization can normalize
+// or persist an invalid identity.
+func TestEncodeRejectsInvalidReportBoundary(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -561,11 +592,65 @@ func TestDecodeRejectsInvalidReport(t *testing.T) {
 			t.Parallel()
 			r := baseReport()
 			tt.mutate(&r)
-			enc, err := reportjson.Encode(r)
-			if err != nil {
-				t.Fatalf("Encode: %v", err)
+			_, err := reportjson.Encode(r)
+			var ee *reportjson.EncodeError
+			if !errors.As(err, &ee) {
+				t.Fatalf("Encode: got %v, want *EncodeError", err)
 			}
-			_, err = reportjson.Decode(enc)
+			var rve *eval.ReportValidationError
+			var ve *eval.ValidationError
+			if !errors.As(err, &rve) && !errors.As(err, &ve) {
+				t.Fatalf("wrapped cause not a typed eval validation error: %v", err)
+			}
+		})
+	}
+}
+
+// TestDecodeRejectsInvalidReport confirms Decode independently applies the root
+// boundary to untrusted wire data. Fixtures begin as valid encoded envelopes and
+// are mutated only after Encode, so this test does not depend on the encoder
+// accepting invalid reports.
+func TestDecodeRejectsInvalidReport(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, report wireObject)
+	}{
+		{
+			name: "oversize scenario id",
+			mutate: func(t *testing.T, r wireObject) {
+				sample := wireObject(wireArrayField(t, r, "samples")[0].(map[string]any))
+				sample["scenario_id"] = strings.Repeat("x", eval.MaxIDBytes+1)
+			},
+		},
+		{
+			name: "successful sample with empty target revision",
+			mutate: func(t *testing.T, r wireObject) {
+				r["target"] = ""
+				wireObjectField(t, r, "provenance")["target"] = ""
+			},
+		},
+		{
+			name: "successful sample omits provenance evaluator",
+			mutate: func(t *testing.T, r wireObject) {
+				provenance := wireObjectField(t, r, "provenance")
+				provenance["evaluators"] = append(wireArrayField(t, provenance, "evaluators"), wireObject{
+					"name": "judge", "revision": "1",
+				})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			env := validWireEnvelope(t)
+			tt.mutate(t, wireObjectField(t, env, "report"))
+			data, err := json.Marshal(env)
+			if err != nil {
+				t.Fatalf("Marshal invalid wire fixture: %v", err)
+			}
+			_, err = reportjson.Decode(data)
 			var ire *reportjson.InvalidReportError
 			if !errors.As(err, &ire) {
 				t.Fatalf("Decode: got %v, want *InvalidReportError", err)
@@ -721,6 +806,28 @@ func TestFileSinkAtomicWrite(t *testing.T) {
 		if filepath.Ext(e.Name()) != ".json" {
 			t.Fatalf("stray non-report file left behind: %s", e.Name())
 		}
+	}
+}
+
+func TestFileSinkRejectsInvalidReportWithoutWriting(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	sink := reportjson.NewFileSink(dir)
+	r := baseReport()
+	r.ID = string([]byte{'r', 0xff})
+
+	err := sink.WriteReport(context.Background(), r)
+	var ee *reportjson.EncodeError
+	if !errors.As(err, &ee) {
+		t.Fatalf("WriteReport: got %v, want *EncodeError", err)
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("ReadDir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("invalid report wrote files: %v", entries)
 	}
 }
 

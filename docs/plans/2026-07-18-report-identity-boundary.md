@@ -140,3 +140,27 @@ sample succeeded.
 
 Confirm a cancelled-before-start runner report passes `Report.Validate`, update
 the validator documentation, and repeat every Task 4 gate.
+
+### Task 6: Close the encode and sink identity boundary
+
+**Files:**
+- Modify: `reportjson/codec.go`
+- Modify: `reportjson/codec_test.go`
+- Modify: `README.md`
+
+**Step 1: Reproduce malformed identity normalization**
+
+Add failing tests proving Encode accepts an invalid-UTF-8 Report ID and FileSink
+reaches its filesystem path instead of rejecting the report before writing.
+
+**Step 2: Validate before serialization**
+
+After projection (to preserve precise projection errors), call
+`Report.Validate` before either JSON marshal and wrap failures in `EncodeError`.
+
+**Step 3: Preserve decoder coverage**
+
+Make invalid-report encoder fixtures expect `EncodeError`. Build decoder-invalid
+fixtures by mutating valid encoded envelopes, proving Decode independently
+enforces the root boundary. Keep deterministic-order and redaction fixtures
+runner-shaped under the strengthened validator.

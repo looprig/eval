@@ -159,15 +159,23 @@ type evaluatorRevJSON struct {
 
 // --- encode -----------------------------------------------------------------
 
-// Encode serializes a report to its canonical, redacted report/v1 wire form. It
-// rejects any non-finite measurement value fail-closed, drops all raw content
-// (conversation, finding messages, target-error causes), and emits every
-// collection in a canonical order so the same report always encodes to identical
-// bytes.
+// Encode serializes a valid report to its canonical, redacted report/v1 wire
+// form. It rejects a report that fails eval.Report.Validate before JSON
+// serialization can normalize a malformed identity, rejects any non-finite
+// measurement value fail-closed, drops all raw content (conversation, finding
+// messages, target-error causes), and emits every collection in a canonical order
+// so the same report always encodes to identical bytes.
 func Encode(r eval.Report) ([]byte, error) {
 	rj, err := projectReport(r)
 	if err != nil {
 		return nil, err
+	}
+	// projectReport runs first so its precise projection errors (notably
+	// NonFiniteValueError) remain part of the public encode contract. Validate
+	// still runs before either json.Marshal call, so malformed UTF-8 identities
+	// cannot be replaced with U+FFFD in an emitted payload.
+	if err := r.Validate(); err != nil {
+		return nil, &EncodeError{Cause: err}
 	}
 	payload, err := json.Marshal(rj)
 	if err != nil {

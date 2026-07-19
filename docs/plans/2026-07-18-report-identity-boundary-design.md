@@ -39,6 +39,13 @@ Complete the remaining runner-shaped identities as well:
 - provenance-only evaluator identities remain valid when no sample succeeded,
   because target failure or cancellation can prevent every assessment.
 
+`reportjson.Encode` must apply `Report.Validate` before either JSON marshal. Go's
+JSON encoder replaces malformed UTF-8 bytes with U+FFFD; without an encode-side
+gate, two malformed identities can collapse to the same wire value and a file
+sink can name the file from different bytes than the body records. Projection
+runs first only to preserve precise projection errors such as
+`NonFiniteValueError`; validation still precedes serialization.
+
 All new failures remain typed and content-free. Identifier/revision shape
 failures use the existing `ValidationError` vocabulary; cross-field Target
 presence contradictions use `ReportValidationError` with fixed reasons. Neither
@@ -63,4 +70,6 @@ tests for the serialized forms and Compare tests for both baseline and candidate
 wrapping. Add regressions for malformed Report IDs and a report-wide evaluator
 union that masks an evaluator missing from one successful sample. Confirm genuine
 runner outputs, including all-target-failed and cancelled/empty-sample reports,
-still validate.
+still validate. Require Encode and FileSink to reject invalid reports without
+writing, and construct decoder-invalid fixtures by mutating an already-valid wire
+envelope so decoder coverage does not rely on an unsafe encoder.
