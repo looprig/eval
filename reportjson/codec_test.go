@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -450,6 +451,33 @@ func TestDecodeRejectsInvalidReport(t *testing.T) {
 		{
 			name:   "empty scenario id",
 			mutate: func(r *eval.Report) { r.Samples[0].ScenarioID = "" },
+		},
+		{
+			name:   "oversize scenario id",
+			mutate: func(r *eval.Report) { r.Samples[0].ScenarioID = strings.Repeat("x", eval.MaxIDBytes+1) },
+		},
+		{
+			name: "empty suite revision",
+			mutate: func(r *eval.Report) {
+				r.Suite = ""
+				r.Provenance.Suite = ""
+			},
+		},
+		{
+			name: "successful sample with empty target revision",
+			mutate: func(r *eval.Report) {
+				r.Target = ""
+				r.Provenance.Target = ""
+			},
+		},
+		{
+			name: "target revision present when every target failed",
+			mutate: func(r *eval.Report) {
+				r.Samples[0].TargetErr = &eval.TargetError{Cause: errors.New("down")}
+				r.Samples[0].Assessments = nil
+				r.Summary.TargetErrors = 1
+				r.Summary.Assessments = nil
+			},
 		},
 		{
 			name: "duplicate sample identity",

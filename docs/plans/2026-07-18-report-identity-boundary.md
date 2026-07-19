@@ -42,8 +42,9 @@ Expected: FAIL because the current report boundary accepts all five cases.
 
 **Step 1: Add fixed report reasons**
 
-Add reasons for invalid scenario identity, missing Suite, missing observed
-Target, and Target present without a successful sample.
+Add reasons for missing observed Target and Target present without a successful
+sample. Scenario and Suite shape failures reuse `ValidationError` from the
+existing identifier/revision validators.
 
 **Step 2: Apply existing validators**
 

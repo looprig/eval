@@ -226,10 +226,11 @@ func (e *TargetError) Unwrap() error {
 }
 
 // ReportValidationError reports that a Report failed a report-level invariant
-// (identity, timestamp ordering, trial index, sample or evaluator uniqueness, or
-// summary consistency). Reason is drawn only from the fixed vocabulary below, so
-// no untrusted content — in particular a data-supplied scenario ID — is ever
-// embedded; only the class of failure is reported.
+// (identity, timestamp ordering, trial index, sample or evaluator uniqueness,
+// summary consistency, or observed-target consistency). Reason is drawn only
+// from the fixed vocabulary below, so no untrusted content — in particular a
+// data-supplied scenario ID — is ever embedded; only the class of failure is
+// reported.
 type ReportValidationError struct {
 	// Reason is one of the reportReason* constants.
 	Reason string
@@ -249,6 +250,8 @@ const (
 	reportReasonDuplicateEvaluator = "duplicate evaluator name within a sample"
 	reportReasonSummaryMismatch    = "summary is inconsistent with the samples"
 	reportReasonProvenanceMismatch = "provenance is inconsistent with the report body"
+	reportReasonMissingTarget      = "successful sample requires an observed target revision"
+	reportReasonUnexpectedTarget   = "target revision requires a successful sample"
 
 	reportReasonTargetErrorWithAssessments = "sample with a target error must not carry assessments"
 

@@ -3,6 +3,7 @@ package compare_test
 import (
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/looprig/eval"
@@ -315,14 +316,26 @@ func TestCompareRejectsInvalidInput(t *testing.T) {
 			sample("s1", 0, eval.Pass(desc("e", "1"))),
 		)
 	}
+	overlongScenarioID := func() eval.Report {
+		r := report(sample("s1", 0, eval.Pass(desc("e", "1"))))
+		r.Samples[0].ScenarioID = strings.Repeat("x", eval.MaxIDBytes+1)
+		return r
+	}
+	missingTarget := func() eval.Report {
+		r := report(sample("s1", 0, eval.Pass(desc("e", "1"))))
+		r.Target = ""
+		r.Provenance.Target = ""
+		return r
+	}
 	valid := report(sample("s1", 0, eval.Pass(desc("e", "1"))))
 
 	tests := []struct {
-		name       string
-		baseline   eval.Report
-		candidate  eval.Report
-		wantSide   compare.ComparisonSide
-		wantReason string
+		name           string
+		baseline       eval.Report
+		candidate      eval.Report
+		wantSide       compare.ComparisonSide
+		wantReason     string
+		wantValidation bool
 	}{
 		{
 			name:       "invalid baseline duplicate evaluator name",
@@ -352,6 +365,20 @@ func TestCompareRejectsInvalidInput(t *testing.T) {
 			wantSide:   compare.SideCandidate,
 			wantReason: "duplicate sample identity (scenario id and trial index)",
 		},
+		{
+			name:           "invalid baseline oversize scenario id",
+			baseline:       overlongScenarioID(),
+			candidate:      valid,
+			wantSide:       compare.SideBaseline,
+			wantValidation: true,
+		},
+		{
+			name:       "invalid candidate missing observed target",
+			baseline:   valid,
+			candidate:  missingTarget(),
+			wantSide:   compare.SideCandidate,
+			wantReason: "successful sample requires an observed target revision",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -366,12 +393,20 @@ func TestCompareRejectsInvalidInput(t *testing.T) {
 				t.Fatalf("side = %q, want %q", ire.Side, tt.wantSide)
 			}
 			// The underlying typed validation error is classifiable via Unwrap.
-			var rve *eval.ReportValidationError
-			if !errors.As(err, &rve) {
-				t.Fatalf("cause not a *eval.ReportValidationError: %v", err)
+			if tt.wantReason != "" {
+				var rve *eval.ReportValidationError
+				if !errors.As(err, &rve) {
+					t.Fatalf("cause not a *eval.ReportValidationError: %v", err)
+				}
+				if rve.Reason != tt.wantReason {
+					t.Fatalf("reason = %q, want %q", rve.Reason, tt.wantReason)
+				}
 			}
-			if rve.Reason != tt.wantReason {
-				t.Fatalf("reason = %q, want %q", rve.Reason, tt.wantReason)
+			if tt.wantValidation {
+				var ve *eval.ValidationError
+				if !errors.As(err, &ve) {
+					t.Fatalf("cause not a *eval.ValidationError: %v", err)
+				}
 			}
 		})
 	}

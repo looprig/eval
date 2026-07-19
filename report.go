@@ -57,9 +57,10 @@ type Report struct {
 // codec calls it after decoding) and is also satisfied by every report the runner
 // itself produces. It enforces, in order:
 //
-//   - Identity: ID is non-empty and within MaxReportIDBytes. Suite and Target are
-//     validated only when present — an all-target-failed run legitimately records
-//     an empty observed Target revision.
+//   - Identity: ID is non-empty and within MaxReportIDBytes; Suite is a required
+//     valid revision; Target is valid when present and is present exactly when at
+//     least one sample reached the target successfully. An all-target-failed or
+//     fully cancelled run legitimately records an empty observed Target revision.
 //   - Timestamps: when both StartedAt and EndedAt are set, EndedAt is not before
 //     StartedAt. Zero timestamps are permitted (the runner may leave them unset).
 //   - Samples: every ScenarioID is non-empty, every TrialIndex is non-negative, the
@@ -87,7 +88,7 @@ func (r Report) Validate() error {
 	if len(r.ID) > MaxReportIDBytes {
 		return &ReportValidationError{Reason: reportReasonIDTooLong}
 	}
-	if err := validateOptionalRevision(r.Suite); err != nil {
+	if err := r.Suite.Validate(); err != nil {
 		return err
 	}
 	if err := validateOptionalRevision(r.Target); err != nil {
@@ -97,6 +98,9 @@ func (r Report) Validate() error {
 		return &ReportValidationError{Reason: reportReasonEndBeforeStart}
 	}
 	if err := r.validateSamples(); err != nil {
+		return err
+	}
+	if err := r.validateTargetPresence(); err != nil {
 		return err
 	}
 	if err := r.validateEvaluatorRevisionConsistency(); err != nil {
@@ -184,6 +188,9 @@ func (r Report) validateSamples() error {
 		if s.ScenarioID == "" {
 			return &ReportValidationError{Reason: reportReasonEmptyScenarioID}
 		}
+		if err := validateIdentifier("SampleReport.ScenarioID", s.ScenarioID, MaxIDBytes); err != nil {
+			return err
+		}
 		if s.TrialIndex < 0 {
 			return &ReportValidationError{Reason: reportReasonNegativeTrial}
 		}
@@ -204,6 +211,31 @@ func (r Report) validateSamples() error {
 		}
 	}
 	return nil
+}
+
+// validateTargetPresence ties the report's observed target revision to what the
+// samples prove. A sample without TargetErr reached the target successfully, so
+// at least one such sample requires a non-empty Target. When every sample failed
+// at the target stage (or cancellation left the report with no samples), no
+// target revision was observed and Target must remain empty. The runner emits
+// exactly these shapes through targetRevision; this check rejects contradictory
+// hand-built or decoded reports without echoing report content.
+func (r Report) validateTargetPresence() error {
+	success := false
+	for i := range r.Samples {
+		if r.Samples[i].TargetErr == nil {
+			success = true
+			break
+		}
+	}
+	switch {
+	case success && r.Target == "":
+		return &ReportValidationError{Reason: reportReasonMissingTarget}
+	case !success && r.Target != "":
+		return &ReportValidationError{Reason: reportReasonUnexpectedTarget}
+	default:
+		return nil
+	}
 }
 
 // evaluatorKey is one assessment's identity, used to reject duplicates within a
@@ -257,10 +289,11 @@ func validateSampleAssessments(assessments []Assessment) error {
 }
 
 // validate reports whether every revision the provenance records is well-formed.
-// Suite and Target are validated only when present (an all-failed run records an
-// empty observed Target); each evaluator's Name and Revision are required.
+// Suite is required; Target is validated when present because an all-failed run
+// records an empty observed Target; each evaluator's Name and Revision are
+// required.
 func (p Provenance) validate() error {
-	if err := validateOptionalRevision(p.Suite); err != nil {
+	if err := p.Suite.Validate(); err != nil {
 		return err
 	}
 	if err := validateOptionalRevision(p.Target); err != nil {

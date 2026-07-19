@@ -44,16 +44,49 @@ func TestReportValidate(t *testing.T) {
 		mutate  func(*Report)
 		wantErr bool
 		// wantReason, when set, is the ReportValidationError.Reason expected.
-		wantReason string
+		wantReason     string
+		wantValidation bool
 	}{
 		{name: "valid baseline", mutate: func(*Report) {}, wantErr: false},
 		{name: "empty id", mutate: func(r *Report) { r.ID = "" }, wantErr: true, wantReason: reportReasonEmptyID},
 		{name: "oversize id", mutate: func(r *Report) { r.ID = strings.Repeat("x", MaxReportIDBytes+1) }, wantErr: true, wantReason: reportReasonIDTooLong},
 		{name: "zero timestamps allowed", mutate: func(r *Report) { r.StartedAt = time.Time{}; r.EndedAt = time.Time{} }, wantErr: false},
-		{name: "empty target allowed", mutate: func(r *Report) { r.Target = ""; r.Provenance.Target = "" }, wantErr: false},
+		{
+			name: "empty target allowed when every target failed",
+			mutate: func(r *Report) {
+				r.Target = ""
+				r.Provenance.Target = ""
+				r.Samples[0].TargetErr = &TargetError{Cause: errors.New("down")}
+				r.Samples[0].Assessments = nil
+				r.Summary = summarize(r.Samples)
+			},
+			wantErr: false,
+		},
 		{name: "ended before started", mutate: func(r *Report) { r.EndedAt = r.StartedAt.Add(-time.Second) }, wantErr: true, wantReason: reportReasonEndBeforeStart},
 		{name: "negative trial index", mutate: func(r *Report) { r.Samples[0].TrialIndex = -1 }, wantErr: true, wantReason: reportReasonNegativeTrial},
 		{name: "empty scenario id", mutate: func(r *Report) { r.Samples[0].ScenarioID = "" }, wantErr: true, wantReason: reportReasonEmptyScenarioID},
+		{name: "oversize scenario id", mutate: func(r *Report) { r.Samples[0].ScenarioID = strings.Repeat("x", MaxIDBytes+1) }, wantErr: true, wantValidation: true},
+		{name: "invalid utf8 scenario id", mutate: func(r *Report) { r.Samples[0].ScenarioID = string([]byte{0xff}) }, wantErr: true, wantValidation: true},
+		{name: "empty suite revision", mutate: func(r *Report) { r.Suite = ""; r.Provenance.Suite = "" }, wantErr: true, wantValidation: true},
+		{
+			name: "successful sample requires observed target revision",
+			mutate: func(r *Report) {
+				r.Target = ""
+				r.Provenance.Target = ""
+			},
+			wantErr:    true,
+			wantReason: "successful sample requires an observed target revision",
+		},
+		{
+			name: "target revision forbidden when every target failed",
+			mutate: func(r *Report) {
+				r.Samples[0].TargetErr = &TargetError{Cause: errors.New("down")}
+				r.Samples[0].Assessments = nil
+				r.Summary = summarize(r.Samples)
+			},
+			wantErr:    true,
+			wantReason: "target revision requires a successful sample",
+		},
 		{
 			name: "duplicate sample identity",
 			mutate: func(r *Report) {
@@ -186,6 +219,12 @@ func TestReportValidate(t *testing.T) {
 				}
 				if rve.Reason != tt.wantReason {
 					t.Fatalf("reason = %q, want %q", rve.Reason, tt.wantReason)
+				}
+			}
+			if tt.wantValidation {
+				var ve *ValidationError
+				if !errors.As(err, &ve) {
+					t.Fatalf("error not a *ValidationError: %v", err)
 				}
 			}
 		})

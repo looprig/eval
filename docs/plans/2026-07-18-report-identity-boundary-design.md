@@ -28,8 +28,10 @@ Tie Target presence to the samples:
 - the existing provenance equality check continues to require
   `Provenance.Target == Report.Target`.
 
-All new failures use `ReportValidationError` with fixed-vocabulary reasons so no
-scenario identity or other untrusted value is echoed.
+All new failures remain typed and content-free. Identifier/revision shape
+failures use the existing `ValidationError` vocabulary; cross-field Target
+presence contradictions use `ReportValidationError` with fixed reasons. Neither
+error type echoes a scenario identity or other untrusted value.
 
 ## Alternatives Considered
 
