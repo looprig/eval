@@ -172,8 +172,8 @@ func Encode(r eval.Report) ([]byte, error) {
 	}
 	// projectReport runs first so its precise projection errors (notably
 	// NonFiniteValueError) remain part of the public encode contract. Validate
-	// still runs before either json.Marshal call, so malformed UTF-8 identities
-	// cannot be replaced with U+FFFD in an emitted payload.
+	// still runs before either top-level payload/envelope json.Marshal call, so
+	// malformed UTF-8 identities cannot be replaced with U+FFFD in emitted bytes.
 	if err := r.Validate(); err != nil {
 		return nil, &EncodeError{Cause: err}
 	}
