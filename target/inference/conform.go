@@ -15,7 +15,7 @@ package inference
 import (
 	"bytes"
 	"encoding/json"
-	"math"
+	"math/big"
 	"reflect"
 
 	"github.com/looprig/eval"
@@ -227,40 +227,61 @@ func jsonKindOf(raw json.RawMessage) jsonKind {
 	return jsonKindInvalid
 }
 
-// isIntegralNumber reports whether a JSON number has no fractional part. It
-// accepts integer forms (including exponent forms that resolve to an integer) and
-// rejects a genuine fraction such as 1.5.
+// isIntegralNumber reports whether a JSON number has no fractional part. It tests
+// integrality EXACTLY on the number's original textual token via math/big, with no
+// float64 round-trip: big.Rat represents the token's value with arbitrary
+// magnitude and precision, so a genuine fraction (1.5, 1.0000000000000001,
+// 9007199254740992.5) is rejected and an integer that overflows float64 (1e309) is
+// accepted. It accepts integer forms including exponent forms that resolve to an
+// integer (1, 1.0, 1e0, 10e-1). A token that fails to parse fails secure (false).
 func isIntegralNumber(raw json.RawMessage) bool {
+	rat, ok := numberRat(raw)
+	return ok && rat.IsInt()
+}
+
+// numberRat parses a JSON number token into an exact big.Rat. It first decodes the
+// token as a json.Number (validating it and stripping any surrounding whitespace),
+// then parses that literal with big.Rat, which handles arbitrary magnitude, a
+// decimal point, and an exponent with no precision loss and no overflow. It
+// returns ok=false when the value is not a well-formed JSON number.
+func numberRat(raw json.RawMessage) (*big.Rat, bool) {
 	var number json.Number
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	if decoder.Decode(&number) != nil {
-		return false
+		return nil, false
 	}
-	if _, err := number.Int64(); err == nil {
-		return true
-	}
-	value, err := number.Float64()
-	if err != nil {
-		return false
-	}
-	return value == math.Trunc(value)
+	return new(big.Rat).SetString(string(number))
 }
 
-// enumContains reports whether doc equals one of the enum members. Both sides are
-// decoded to a generic JSON value and compared structurally, so equivalent
-// numeric renderings (1 and 1.0) match. A member that fails to decode is skipped.
+// enumContains reports whether doc equals one of the enum members. Equality is
+// per-kind: two JSON numbers compare by VALUE via big.Rat, so equivalent numeric
+// renderings (1 and 1.0) match without a lossy float round-trip, while string,
+// boolean, and null members compare structurally (so "a" and "a " differ). A
+// member that fails to decode is skipped.
 func enumContains(members []json.RawMessage, doc json.RawMessage) bool {
-	want, ok := decodeJSONValue(doc)
-	if !ok {
-		return false
-	}
 	for _, member := range members {
-		got, ok := decodeJSONValue(member)
-		if ok && reflect.DeepEqual(want, got) {
+		if scalarEqual(member, doc) {
 			return true
 		}
 	}
 	return false
+}
+
+// scalarEqual reports whether two scalar JSON values are equal. Numbers compare by
+// exact rational value; every other kind compares structurally. Values of
+// differing kinds are never equal.
+func scalarEqual(a, b json.RawMessage) bool {
+	if jsonKindOf(a) != jsonKindOf(b) {
+		return false
+	}
+	if jsonKindOf(a) == jsonKindNumber {
+		ra, oka := numberRat(a)
+		rb, okb := numberRat(b)
+		return oka && okb && ra.Cmp(rb) == 0
+	}
+	va, oka := decodeJSONValue(a)
+	vb, okb := decodeJSONValue(b)
+	return oka && okb && reflect.DeepEqual(va, vb)
 }
 
 func decodeJSONValue(raw json.RawMessage) (any, bool) {
