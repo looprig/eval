@@ -64,12 +64,17 @@ type Report struct {
 //     StartedAt. Zero timestamps are permitted (the runner may leave them unset).
 //   - Samples: every TrialIndex is non-negative, the (ScenarioID, TrialIndex)
 //     identity is unique across samples, and within each sample no two assessments
-//     share an (Evaluator, Revision) identity. Each contained Assessment is itself
-//     valid.
+//     share an evaluator NAME (a name identifies exactly one evaluator, so a repeat
+//     is rejected even when the revisions differ). Each contained Assessment is
+//     itself valid.
+//   - Evaluator revision consistency: report-wide, an evaluator name maps to
+//     exactly one revision — the same name carrying two different revisions across
+//     samples (revision drift) is rejected.
 //   - Summary: the stored Summary agrees with the samples (recomputed via
 //     summarize) — same sample count, target-error count, and per-status tally.
 //   - Provenance: every recorded revision is well-formed (Suite/Target validated
-//     when present; each evaluator's Name and Revision required).
+//     when present; each evaluator's Name and Revision required) and no evaluator
+//     name is repeated.
 //
 // Diagnostics never echo a data-supplied value (a scenario ID is untrusted); a
 // structural failure is reported as a ReportValidationError carrying only a
@@ -92,6 +97,9 @@ func (r Report) Validate() error {
 		return &ReportValidationError{Reason: reportReasonEndBeforeStart}
 	}
 	if err := r.validateSamples(); err != nil {
+		return err
+	}
+	if err := r.validateEvaluatorRevisionConsistency(); err != nil {
 		return err
 	}
 	if !summaryConsistent(r.Summary, summarize(r.Samples)) {
@@ -197,19 +205,45 @@ type evaluatorKey struct {
 	revision Revision
 }
 
+// validateEvaluatorRevisionConsistency rejects report-wide revision drift: the
+// same evaluator NAME appearing with two DIFFERENT revisions anywhere across the
+// report's samples. Within a single report a name must map to exactly one
+// revision — comparison keys a case by evaluator name and records one revision,
+// so a name identifying two revisions is ambiguous and one would be silently
+// absorbed as a trial of the other. The runner never emits this (its evaluator
+// names are unique per run, enforced at preflight), so a genuine report always
+// passes; a decoded, untrusted report may carry it and is rejected here.
+func (r Report) validateEvaluatorRevisionConsistency() error {
+	revByName := make(map[Name]Revision)
+	for i := range r.Samples {
+		for _, a := range r.Samples[i].Assessments {
+			if rev, ok := revByName[a.Evaluator]; ok {
+				if rev != a.Revision {
+					return &ReportValidationError{Reason: reportReasonEvaluatorRevisionDrift}
+				}
+				continue
+			}
+			revByName[a.Evaluator] = a.Revision
+		}
+	}
+	return nil
+}
+
 // validateSampleAssessments validates each assessment in a sample and rejects a
-// repeated (Evaluator, Revision) identity within that sample.
+// repeated evaluator NAME within that sample. A name must identify exactly one
+// evaluator, so a repeat is rejected on the name alone — even when the two
+// assessments carry different revisions, which would otherwise slip past a
+// (name, revision) uniqueness check and corrupt cross-evaluator comparison.
 func validateSampleAssessments(assessments []Assessment) error {
-	seen := make(map[evaluatorKey]struct{}, len(assessments))
+	seen := make(map[Name]struct{}, len(assessments))
 	for _, a := range assessments {
 		if err := a.Validate(); err != nil {
 			return err
 		}
-		key := evaluatorKey{name: a.Evaluator, revision: a.Revision}
-		if _, dup := seen[key]; dup {
+		if _, dup := seen[a.Evaluator]; dup {
 			return &ReportValidationError{Reason: reportReasonDuplicateEvaluator}
 		}
-		seen[key] = struct{}{}
+		seen[a.Evaluator] = struct{}{}
 	}
 	return nil
 }
@@ -224,6 +258,7 @@ func (p Provenance) validate() error {
 	if err := validateOptionalRevision(p.Target); err != nil {
 		return err
 	}
+	seen := make(map[Name]struct{}, len(p.Evaluators))
 	for _, e := range p.Evaluators {
 		if err := e.Name.Validate(); err != nil {
 			return err
@@ -231,6 +266,13 @@ func (p Provenance) validate() error {
 		if err := e.Revision.Validate(); err != nil {
 			return err
 		}
+		// Provenance records one identity per evaluator; a repeated name (with the
+		// same or a different revision) is ambiguous. Rejecting it here also keeps
+		// provenance consistent with the body's now name-unique evaluator set.
+		if _, dup := seen[e.Name]; dup {
+			return &ReportValidationError{Reason: reportReasonDuplicateProvenanceEvaluator}
+		}
+		seen[e.Name] = struct{}{}
 	}
 	return nil
 }

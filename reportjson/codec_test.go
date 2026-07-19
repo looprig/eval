@@ -466,6 +466,26 @@ func TestDecodeRejectsInvalidReport(t *testing.T) {
 			mutate: func(r *eval.Report) { r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusFail: 1} },
 		},
 		{
+			// The same evaluator name appears with revision 1 in one sample and
+			// revision 2 in another: report-wide revision drift the decode boundary
+			// must reject. Summary and provenance are kept consistent so the drift is
+			// the sole failure under test.
+			name: "evaluator revision drift across samples",
+			mutate: func(r *eval.Report) {
+				r.Samples = append(r.Samples, eval.SampleReport{
+					ScenarioID:  "s2",
+					TrialIndex:  0,
+					Assessments: []eval.Assessment{passWith("exact", "2", measure("score", 1, eval.UnitRatio))},
+				})
+				r.Summary.Samples = 2
+				r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusPass: 2}
+				r.Provenance.Evaluators = []eval.EvaluatorRevision{
+					{Name: eval.Name("exact"), Revision: eval.Revision("1")},
+					{Name: eval.Name("exact"), Revision: eval.Revision("2")},
+				}
+			},
+		},
+		{
 			// A forged baseline that presents a passing assessment for a sample whose
 			// target errored: the runner never emits this, and the decode boundary must
 			// reject it (a target error skips assessment). Summary.TargetErrors is kept

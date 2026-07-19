@@ -168,6 +168,14 @@ func index(r eval.Report) (map[CaseKey]*caseData, error) {
 			if cd == nil {
 				cd = &caseData{revision: a.Revision}
 				out[key] = cd
+			} else if a.Revision != cd.revision {
+				// Intra-report revision drift: the same evaluator name already appears in
+				// THIS report under a different revision. Absorbing it as another trial of
+				// the first revision would silently lose the second identity. Reject it
+				// fail-closed. (A legitimate cross-report revision change is not seen here:
+				// index runs once per report, so baseline E@v1 and candidate E@v2 remain
+				// each internally consistent and surface later as an incompatible case.)
+				return nil, &EvaluatorRevisionDriftError{}
 			}
 			cd.trials = append(cd.trials, TrialResult{
 				TrialIndex:   s.TrialIndex,

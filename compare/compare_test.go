@@ -244,6 +244,42 @@ func TestCompareIntraSideUnitDriftForcesChanged(t *testing.T) {
 	}
 }
 
+func TestCompareRejectsIntraReportRevisionDrift(t *testing.T) {
+	t.Parallel()
+
+	// A SINGLE report whose two samples carry the same evaluator name under
+	// different revisions. Gathering them into one case would silently absorb the
+	// second revision as a trial of the first; comparison must reject it.
+	drift := report(
+		sample("s1", 0, eval.Pass(desc("e", "1"))),
+		sample("s1", 1, eval.Pass(desc("e", "2"))),
+	)
+	_, err := compare.Compare(drift, report())
+	var de *compare.EvaluatorRevisionDriftError
+	if !errors.As(err, &de) {
+		t.Fatalf("got %v, want *EvaluatorRevisionDriftError", err)
+	}
+}
+
+func TestCompareCrossReportRevisionIsIncompatibleNotDrift(t *testing.T) {
+	t.Parallel()
+
+	// Baseline has E@v1 and candidate has E@v2 — each report is INTERNALLY
+	// consistent (one revision per name). This is a legitimate cross-report
+	// revision change and must surface as an incompatible case, never a drift
+	// error: the drift rejection is intra-report only.
+	baseline := report(sample("s1", 0, eval.Pass(desc("e", "1"))))
+	candidate := report(sample("s1", 0, eval.Pass(desc("e", "2"))))
+	cmp, err := compare.Compare(baseline, candidate)
+	if err != nil {
+		t.Fatalf("cross-report revision change must not error: %v", err)
+	}
+	cc := findCase(t, cmp, "s1", "e")
+	if cc.Class != compare.CaseIncompatible {
+		t.Fatalf("class = %q, want %q", cc.Class, compare.CaseIncompatible)
+	}
+}
+
 func TestCompareRejectsNonFinite(t *testing.T) {
 	t.Parallel()
 

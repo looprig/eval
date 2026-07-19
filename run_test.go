@@ -694,6 +694,65 @@ func TestRunPreflightNilEvaluator(t *testing.T) {
 	}
 }
 
+func TestRunPreflightDuplicateEvaluatorName(t *testing.T) {
+	t.Parallel()
+	// A second evaluator with the given descriptor, used to build a same-name pair.
+	evWith := func(d Descriptor) stubEvaluator {
+		return stubEvaluator{desc: d, eval: func(context.Context, Sample) (Assessment, error) {
+			return Pass(d), nil
+		}}
+	}
+	tests := []struct {
+		name       string
+		evaluators []Evaluator
+	}{
+		{
+			name:       "identical evaluators (same name, same revision)",
+			evaluators: []Evaluator{passEvaluator("q"), passEvaluator("q")},
+		},
+		{
+			name: "same name, different revision",
+			evaluators: []Evaluator{
+				evWith(Descriptor{Name: "q", Revision: "v1", Method: MethodProgrammatic}),
+				evWith(Descriptor{Name: "q", Revision: "v2", Method: MethodProgrammatic}),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// A target that fails the test if it is ever observed: a duplicate-name
+			// evaluator set must be rejected at preflight, before any execution.
+			target := stubTarget{name: "must-not-run", observe: func(context.Context, Scenario) (Observation, error) {
+				t.Error("Observe called: duplicate-name evaluators must be rejected before execution")
+				return runObservation(), nil
+			}}
+			report, err := Run(context.Background(), RunConfig{}, runSuite("s0"), target, tt.evaluators...)
+			var de *DuplicateEvaluatorNameError
+			if !errors.As(err, &de) {
+				t.Fatalf("error = %v, want *DuplicateEvaluatorNameError", err)
+			}
+			if len(report.Samples) != 0 {
+				t.Fatalf("preflight failure must return zero report, got %d samples", len(report.Samples))
+			}
+		})
+	}
+}
+
+// TestRunDistinctEvaluatorNamesReportValidates confirms a normal, distinct-name
+// evaluator set still runs and its report passes Report.Validate.
+func TestRunDistinctEvaluatorNamesReportValidates(t *testing.T) {
+	t.Parallel()
+	report, err := Run(context.Background(), RunConfig{}, runSuite("s0", "s1"), okTarget(),
+		passEvaluator("q"), passEvaluator("r"))
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if verr := report.Validate(); verr != nil {
+		t.Fatalf("distinct-name run report failed Report.Validate: %v", verr)
+	}
+}
+
 func TestRunPreflightInvalidDescriptor(t *testing.T) {
 	t.Parallel()
 	bad := stubEvaluator{desc: Descriptor{Name: "", Revision: "v1"}} // empty name

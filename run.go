@@ -120,13 +120,25 @@ func preflight(cfg RunConfig, suite Suite, target Target, evaluators []Evaluator
 	if target == nil {
 		return &NilTargetError{}
 	}
+	seen := make(map[Name]struct{}, len(evaluators))
 	for _, ev := range evaluators {
 		if ev == nil {
 			return &NilEvaluatorError{}
 		}
-		if err := ev.Descriptor().Validate(); err != nil {
+		desc := ev.Descriptor()
+		if err := desc.Validate(); err != nil {
 			return err
 		}
+		// Within a run an evaluator name must identify exactly one evaluator. Two
+		// evaluators sharing a name collide: an identical pair corrupts a sample's
+		// assessment set (Report.Validate rejects the repeated name), and a
+		// same-name/different-revision pair silently loses one revision when a
+		// report or comparison keys a case by name. Reject the collision here,
+		// before any execution.
+		if _, dup := seen[desc.Name]; dup {
+			return &DuplicateEvaluatorNameError{}
+		}
+		seen[desc.Name] = struct{}{}
 	}
 	return nil
 }

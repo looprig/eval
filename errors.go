@@ -190,6 +190,20 @@ func (e *NilEvaluatorError) Error() string {
 	return "eval: evaluator must not be nil"
 }
 
+// DuplicateEvaluatorNameError reports that Run was given two evaluators sharing
+// the same Descriptor.Name. Within a single run an evaluator name must identify
+// exactly one evaluator (one revision): the report keys a sample's assessments
+// and cross-report comparison keys its cases by evaluator name, so two evaluators
+// under one name would collide — an identical pair corrupts the sample's
+// assessment set, and a same-name/different-revision pair silently loses one
+// revision's identity. It is rejected at preflight before any execution. The
+// offending name is caller-supplied and withheld from the message.
+type DuplicateEvaluatorNameError struct{}
+
+func (e *DuplicateEvaluatorNameError) Error() string {
+	return "eval: duplicate evaluator name in run"
+}
+
 // TargetError reports that a sample's target stage failed: the target returned
 // an error, timed out, was cancelled, or produced an observation that did not
 // validate. It is a stage error, never a failed quality assessment. The wrapped
@@ -231,11 +245,22 @@ const (
 	reportReasonEndBeforeStart     = "ended_at is before started_at"
 	reportReasonNegativeTrial      = "sample trial index must not be negative"
 	reportReasonDuplicateSample    = "duplicate sample identity (scenario id and trial index)"
-	reportReasonDuplicateEvaluator = "duplicate evaluator identity within a sample"
+	reportReasonDuplicateEvaluator = "duplicate evaluator name within a sample"
 	reportReasonSummaryMismatch    = "summary is inconsistent with the samples"
 	reportReasonProvenanceMismatch = "provenance is inconsistent with the report body"
 
 	reportReasonTargetErrorWithAssessments = "sample with a target error must not carry assessments"
+
+	// reportReasonEvaluatorRevisionDrift rejects an evaluator name that appears
+	// with more than one revision anywhere across the report's samples. Within a
+	// single report a name must map to exactly one revision — comparison keys a
+	// case by evaluator name, so a name identifying two revisions is ambiguous.
+	reportReasonEvaluatorRevisionDrift = "evaluator name maps to more than one revision across the report"
+
+	// reportReasonDuplicateProvenanceEvaluator rejects two provenance entries that
+	// share an evaluator name. Provenance records one identity per evaluator; a
+	// repeated name (with the same or a different revision) is ambiguous.
+	reportReasonDuplicateProvenanceEvaluator = "duplicate evaluator name in provenance"
 )
 
 // SampleSubjectMismatchError reports that a sample's observation described a

@@ -70,6 +70,42 @@ func TestReportValidate(t *testing.T) {
 			wantReason: reportReasonDuplicateEvaluator,
 		},
 		{
+			// Two assessments in one sample sharing an evaluator NAME but carrying
+			// DIFFERENT revisions is still a within-sample name collision: a name must
+			// identify exactly one evaluator. Rejected on the name alone.
+			name: "same evaluator name different revision within sample",
+			mutate: func(r *Report) {
+				r.Samples[0].Assessments = append(r.Samples[0].Assessments, Pass(Descriptor{Name: "q", Revision: "v2", Method: MethodProgrammatic}))
+			},
+			wantErr:    true,
+			wantReason: reportReasonDuplicateEvaluator,
+		},
+		{
+			// The same evaluator name appearing with v1 in one sample and v2 in
+			// another is report-wide revision drift: a name must map to one revision.
+			name: "evaluator revision drift across samples",
+			mutate: func(r *Report) {
+				r.Samples = append(r.Samples, SampleReport{
+					ScenarioID:  "s1",
+					TrialIndex:  0,
+					Observation: runObservation(),
+					Assessments: []Assessment{Pass(Descriptor{Name: "q", Revision: "v2", Method: MethodProgrammatic})},
+				})
+			},
+			wantErr:    true,
+			wantReason: reportReasonEvaluatorRevisionDrift,
+		},
+		{
+			// Provenance carrying the same evaluator name twice is ambiguous even
+			// when the revisions differ.
+			name: "provenance duplicate evaluator name",
+			mutate: func(r *Report) {
+				r.Provenance.Evaluators = []EvaluatorRevision{{Name: "q", Revision: "v1"}, {Name: "q", Revision: "v2"}}
+			},
+			wantErr:    true,
+			wantReason: reportReasonDuplicateProvenanceEvaluator,
+		},
+		{
 			// A sample that both errored at the target stage AND carries assessments
 			// is contradictory (a target error skips assessment) and must be rejected
 			// at the boundary. validateSamples fires before the summary check.
