@@ -53,6 +53,7 @@ func TestReportValidate(t *testing.T) {
 		{name: "empty target allowed", mutate: func(r *Report) { r.Target = ""; r.Provenance.Target = "" }, wantErr: false},
 		{name: "ended before started", mutate: func(r *Report) { r.EndedAt = r.StartedAt.Add(-time.Second) }, wantErr: true, wantReason: reportReasonEndBeforeStart},
 		{name: "negative trial index", mutate: func(r *Report) { r.Samples[0].TrialIndex = -1 }, wantErr: true, wantReason: reportReasonNegativeTrial},
+		{name: "empty scenario id", mutate: func(r *Report) { r.Samples[0].ScenarioID = "" }, wantErr: true, wantReason: reportReasonEmptyScenarioID},
 		{
 			name: "duplicate sample identity",
 			mutate: func(r *Report) {

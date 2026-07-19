@@ -243,6 +243,7 @@ const (
 	reportReasonEmptyID            = "id must not be empty"
 	reportReasonIDTooLong          = "id exceeds the length bound"
 	reportReasonEndBeforeStart     = "ended_at is before started_at"
+	reportReasonEmptyScenarioID    = "sample scenario id must not be empty"
 	reportReasonNegativeTrial      = "sample trial index must not be negative"
 	reportReasonDuplicateSample    = "duplicate sample identity (scenario id and trial index)"
 	reportReasonDuplicateEvaluator = "duplicate evaluator name within a sample"

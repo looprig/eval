@@ -115,12 +115,29 @@ type Comparison struct {
 	Cases []CaseComparison
 }
 
-// Compare diffs candidate against baseline. It fails closed on a non-finite
+// Compare diffs candidate against baseline. It first validates both inputs at the
+// report boundary (Report.Validate), returning an *InvalidReportError that names
+// the offending side, so an input bypassing reportjson.Decode cannot merge
+// distinct assessments into one case. It then fails closed on a non-finite
 // measurement value (a report should never contain one; comparison rejects it
 // rather than propagate a poisoned aggregate) and otherwise returns a per-case
 // diff that retains individual trial results and compares distributions only for
 // compatible cases.
 func Compare(baseline, candidate eval.Report) (Comparison, error) {
+	// Validate BOTH inputs at the report boundary before indexing. index only
+	// guards intra-report revision drift; it does NOT catch a within-sample
+	// duplicate evaluator name or a duplicate (ScenarioID, TrialIndex) sample
+	// identity. A hand-built or non-decoded report that bypassed reportjson.Decode
+	// (which calls Report.Validate) could otherwise merge distinct assessments into
+	// one case and hide a result. Fail closed here, naming the offending side so a
+	// caller can distinguish baseline from candidate.
+	if err := baseline.Validate(); err != nil {
+		return Comparison{}, &InvalidReportError{Side: SideBaseline, Cause: err}
+	}
+	if err := candidate.Validate(); err != nil {
+		return Comparison{}, &InvalidReportError{Side: SideCandidate, Cause: err}
+	}
+
 	base, err := index(baseline)
 	if err != nil {
 		return Comparison{}, err

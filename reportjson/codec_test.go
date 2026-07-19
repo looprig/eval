@@ -448,6 +448,10 @@ func TestDecodeRejectsInvalidReport(t *testing.T) {
 			mutate: func(r *eval.Report) { r.Samples[0].TrialIndex = -1 },
 		},
 		{
+			name:   "empty scenario id",
+			mutate: func(r *eval.Report) { r.Samples[0].ScenarioID = "" },
+		},
+		{
 			name: "duplicate sample identity",
 			mutate: func(r *eval.Report) {
 				r.Samples = append(r.Samples, r.Samples[0])

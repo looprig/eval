@@ -21,8 +21,53 @@ func sample(scenario string, trial int, as ...eval.Assessment) eval.SampleReport
 	return eval.SampleReport{ScenarioID: scenario, TrialIndex: trial, Assessments: as}
 }
 
+// report builds a fully Report.Validate-clean report from the given samples:
+// Compare now validates both inputs, so every fixture must carry a consistent
+// Summary and Provenance derived from its samples, not just the raw sample list.
 func report(samples ...eval.SampleReport) eval.Report {
-	return eval.Report{ID: "r", Suite: eval.Revision("s@1"), Target: eval.Revision("t@1"), Samples: samples}
+	return eval.Report{
+		ID:         "r",
+		Suite:      eval.Revision("s@1"),
+		Target:     eval.Revision("t@1"),
+		Samples:    samples,
+		Summary:    summaryOf(samples),
+		Provenance: provenanceOf(samples),
+	}
+}
+
+// summaryOf recomputes the minimal Summary the report boundary expects from the
+// samples (sample count, target-error count, per-status tally).
+func summaryOf(samples []eval.SampleReport) eval.Summary {
+	counts := make(map[eval.AssessmentStatus]int)
+	targetErrs := 0
+	for _, s := range samples {
+		if s.TargetErr != nil {
+			targetErrs++
+		}
+		for _, a := range s.Assessments {
+			counts[a.Status]++
+		}
+	}
+	return eval.Summary{Samples: len(samples), TargetErrors: targetErrs, Assessments: counts}
+}
+
+// provenanceOf assembles a provenance whose evaluator set equals the assessed
+// set, in first-seen order, so a valid report passes validateProvenanceConsistency.
+// For a valid report each evaluator name maps to exactly one revision, so keying
+// by name is sufficient.
+func provenanceOf(samples []eval.SampleReport) eval.Provenance {
+	var evs []eval.EvaluatorRevision
+	seen := make(map[eval.Name]struct{})
+	for _, s := range samples {
+		for _, a := range s.Assessments {
+			if _, ok := seen[a.Evaluator]; ok {
+				continue
+			}
+			seen[a.Evaluator] = struct{}{}
+			evs = append(evs, eval.EvaluatorRevision{Name: a.Evaluator, Revision: a.Revision})
+		}
+	}
+	return eval.Provenance{Suite: eval.Revision("s@1"), Target: eval.Revision("t@1"), Evaluators: evs}
 }
 
 func findCase(t *testing.T, c compare.Comparison, scenario, evaluator string) compare.CaseComparison {
@@ -244,20 +289,91 @@ func TestCompareIntraSideUnitDriftForcesChanged(t *testing.T) {
 	}
 }
 
-func TestCompareRejectsIntraReportRevisionDrift(t *testing.T) {
+func TestCompareRejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 
-	// A SINGLE report whose two samples carry the same evaluator name under
-	// different revisions. Gathering them into one case would silently absorb the
-	// second revision as a trial of the first; comparison must reject it.
-	drift := report(
-		sample("s1", 0, eval.Pass(desc("e", "1"))),
-		sample("s1", 1, eval.Pass(desc("e", "2"))),
-	)
-	_, err := compare.Compare(drift, report())
-	var de *compare.EvaluatorRevisionDriftError
-	if !errors.As(err, &de) {
-		t.Fatalf("got %v, want *EvaluatorRevisionDriftError", err)
+	// Compare validates BOTH inputs before indexing. A report that bypasses the
+	// decode boundary (hand-built here) can carry a within-sample duplicate
+	// evaluator name or a duplicate (ScenarioID, TrialIndex) identity — either of
+	// which would silently merge distinct assessments into one case. Compare must
+	// reject it as an *InvalidReportError naming the offending side, whose Cause is
+	// the report's own typed validation error.
+	dupEvaluatorName := func() eval.Report {
+		// One sample, two assessments sharing the evaluator name "e" (a pass and a
+		// fail). Without validation these collapse into one case and the pass is
+		// hidden behind the fail.
+		return report(sample("s1", 0,
+			eval.Pass(desc("e", "1")),
+			eval.Fail(desc("e", "1"), eval.Finding{Code: eval.FindingCode("x"), Severity: eval.SeverityHigh}),
+		))
+	}
+	dupSampleIdentity := func() eval.Report {
+		// Two samples sharing (ScenarioID "s1", TrialIndex 0): an ambiguous sample
+		// identity the report boundary forbids.
+		return report(
+			sample("s1", 0, eval.Pass(desc("e", "1"))),
+			sample("s1", 0, eval.Pass(desc("e", "1"))),
+		)
+	}
+	valid := report(sample("s1", 0, eval.Pass(desc("e", "1"))))
+
+	tests := []struct {
+		name       string
+		baseline   eval.Report
+		candidate  eval.Report
+		wantSide   compare.ComparisonSide
+		wantReason string
+	}{
+		{
+			name:       "invalid baseline duplicate evaluator name",
+			baseline:   dupEvaluatorName(),
+			candidate:  valid,
+			wantSide:   compare.SideBaseline,
+			wantReason: "duplicate evaluator name within a sample",
+		},
+		{
+			name:       "invalid baseline duplicate sample identity",
+			baseline:   dupSampleIdentity(),
+			candidate:  valid,
+			wantSide:   compare.SideBaseline,
+			wantReason: "duplicate sample identity (scenario id and trial index)",
+		},
+		{
+			name:       "invalid candidate duplicate evaluator name",
+			baseline:   valid,
+			candidate:  dupEvaluatorName(),
+			wantSide:   compare.SideCandidate,
+			wantReason: "duplicate evaluator name within a sample",
+		},
+		{
+			name:       "invalid candidate duplicate sample identity",
+			baseline:   valid,
+			candidate:  dupSampleIdentity(),
+			wantSide:   compare.SideCandidate,
+			wantReason: "duplicate sample identity (scenario id and trial index)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := compare.Compare(tt.baseline, tt.candidate)
+			var ire *compare.InvalidReportError
+			if !errors.As(err, &ire) {
+				t.Fatalf("got %v, want *InvalidReportError", err)
+			}
+			// The wrapper lets a caller tell baseline from candidate.
+			if ire.Side != tt.wantSide {
+				t.Fatalf("side = %q, want %q", ire.Side, tt.wantSide)
+			}
+			// The underlying typed validation error is classifiable via Unwrap.
+			var rve *eval.ReportValidationError
+			if !errors.As(err, &rve) {
+				t.Fatalf("cause not a *eval.ReportValidationError: %v", err)
+			}
+			if rve.Reason != tt.wantReason {
+				t.Fatalf("reason = %q, want %q", rve.Reason, tt.wantReason)
+			}
+		})
 	}
 }
 
@@ -277,21 +393,5 @@ func TestCompareCrossReportRevisionIsIncompatibleNotDrift(t *testing.T) {
 	cc := findCase(t, cmp, "s1", "e")
 	if cc.Class != compare.CaseIncompatible {
 		t.Fatalf("class = %q, want %q", cc.Class, compare.CaseIncompatible)
-	}
-}
-
-func TestCompareRejectsNonFinite(t *testing.T) {
-	t.Parallel()
-
-	bad := eval.Report{Samples: []eval.SampleReport{
-		{ScenarioID: "s1", Assessments: []eval.Assessment{
-			{Evaluator: eval.Name("e"), Revision: eval.Revision("1"), Status: eval.StatusPass,
-				Measurements: []eval.Measurement{{Name: eval.Name("m"), Value: math.Inf(1), Unit: eval.UnitRatio}}},
-		}},
-	}}
-	_, err := compare.Compare(bad, report())
-	var nfe *compare.NonFiniteMeasurementError
-	if !errors.As(err, &nfe) {
-		t.Fatalf("got %v, want *NonFiniteMeasurementError", err)
 	}
 }

@@ -62,11 +62,11 @@ type Report struct {
 //     an empty observed Target revision.
 //   - Timestamps: when both StartedAt and EndedAt are set, EndedAt is not before
 //     StartedAt. Zero timestamps are permitted (the runner may leave them unset).
-//   - Samples: every TrialIndex is non-negative, the (ScenarioID, TrialIndex)
-//     identity is unique across samples, and within each sample no two assessments
-//     share an evaluator NAME (a name identifies exactly one evaluator, so a repeat
-//     is rejected even when the revisions differ). Each contained Assessment is
-//     itself valid.
+//   - Samples: every ScenarioID is non-empty, every TrialIndex is non-negative, the
+//     (ScenarioID, TrialIndex) identity is unique across samples, and within each
+//     sample no two assessments share an evaluator NAME (a name identifies exactly
+//     one evaluator, so a repeat is rejected even when the revisions differ). Each
+//     contained Assessment is itself valid.
 //   - Evaluator revision consistency: report-wide, an evaluator name maps to
 //     exactly one revision — the same name carrying two different revisions across
 //     samples (revision drift) is rejected.
@@ -165,9 +165,10 @@ func (r Report) validateProvenanceConsistency() error {
 	return nil
 }
 
-// validateSamples enforces the per-sample invariants: non-negative trial index,
-// unique (ScenarioID, TrialIndex) identity across samples, unique evaluator
-// identity within each sample, and a valid contained Assessment for every entry.
+// validateSamples enforces the per-sample invariants: non-empty scenario ID,
+// non-negative trial index, unique (ScenarioID, TrialIndex) identity across
+// samples, unique evaluator identity within each sample, and a valid contained
+// Assessment for every entry.
 func (r Report) validateSamples() error {
 	type sampleKey struct {
 		scenario string
@@ -176,6 +177,13 @@ func (r Report) validateSamples() error {
 	seen := make(map[sampleKey]struct{}, len(r.Samples))
 	for i := range r.Samples {
 		s := r.Samples[i]
+		// The sample's scenario ID is its stable identity. A genuine Run never emits
+		// an empty one (Scenario.ID is validated non-empty upstream); a decoded,
+		// untrusted report may carry it and is rejected here before it can key an
+		// ambiguous sample identity or a comparison case.
+		if s.ScenarioID == "" {
+			return &ReportValidationError{Reason: reportReasonEmptyScenarioID}
+		}
 		if s.TrialIndex < 0 {
 			return &ReportValidationError{Reason: reportReasonNegativeTrial}
 		}
