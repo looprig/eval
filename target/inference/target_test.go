@@ -13,6 +13,7 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/eval"
+	"github.com/looprig/eval/exact"
 	llm "github.com/looprig/inference"
 	"github.com/looprig/inference/model"
 	"github.com/looprig/inference/stream"
@@ -501,6 +502,173 @@ func TestObserve_ConcurrentNoInterference(t *testing.T) {
 	}
 	if len(seen) != n {
 		t.Errorf("distinct appended inputs = %d, want %d (interference detected)", len(seen), n)
+	}
+}
+
+// structuredToolResponse builds a well-formed native structured response: a
+// single terminal tool-use block named StructuredOutputToolName carrying a JSON
+// object, with the tool-use finish reason. StructuredResult accepts it.
+func structuredToolResponse(objectJSON string) *llm.Response {
+	return &llm.Response{
+		Message: &content.AIMessage{
+			Message: content.Message{
+				Role: content.RoleAssistant,
+				Blocks: []content.Block{
+					&content.ToolUseBlock{
+						ID:    "call_1",
+						Name:  llm.StructuredOutputToolName,
+						Input: json.RawMessage(objectJSON),
+					},
+				},
+			},
+		},
+		FinishReason: stream.FinishReasonToolUse,
+	}
+}
+
+// outputTemplate is a request template that asks for structured output.
+func outputTemplate() llm.Request {
+	return llm.Request{
+		Model:  testModel("m"),
+		Output: &llm.OutputSchema{Name: "score", Strict: true},
+	}
+}
+
+// structuredEvidenceOf returns the single structured-output(-error) evidence in
+// the observation, or (zero, false) when none is present.
+func structuredEvidenceOf(obs eval.Observation) (eval.Evidence, bool) {
+	for _, ev := range obs.Trace.Evidence {
+		if ev.Kind == eval.EvidenceStructuredOutput || ev.Kind == eval.EvidenceStructuredError {
+			return ev, true
+		}
+	}
+	return eval.Evidence{}, false
+}
+
+// TestObserve_StructuredOutputEvidence proves the closed loop: a structured
+// request emits structured-output evidence, and exact.SchemaResult reads it to
+// reach a definite verdict (Pass on success, Fail on a structured failure). An
+// ordinary (non-structured) request emits no structured evidence, so
+// SchemaResult stays Unverified.
+func TestObserve_StructuredOutputEvidence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		template    llm.Request
+		resp        *llm.Response
+		wantKind    eval.EvidenceKind // "" means no structured evidence expected
+		wantReason  eval.StructuredErrorReason
+		wantVerdict eval.AssessmentStatus
+	}{
+		{
+			name:        "structured request, valid response, pass",
+			template:    outputTemplate(),
+			resp:        structuredToolResponse(`{"label":"spam"}`),
+			wantKind:    eval.EvidenceStructuredOutput,
+			wantVerdict: eval.StatusPass,
+		},
+		{
+			name:        "structured request, blocked finish reason, empty-output fail",
+			template:    outputTemplate(),
+			resp:        &llm.Response{Message: aiText("truncated", nil), FinishReason: stream.FinishReasonLength},
+			wantKind:    eval.EvidenceStructuredError,
+			wantReason:  eval.StructuredErrorEmptyOutput,
+			wantVerdict: eval.StatusFail,
+		},
+		{
+			name:        "structured request, malformed json text, invalid-json fail",
+			template:    outputTemplate(),
+			resp:        &llm.Response{Message: aiText("not json at all", nil), FinishReason: stream.FinishReasonStop},
+			wantKind:    eval.EvidenceStructuredError,
+			wantReason:  eval.StructuredErrorInvalidJSON,
+			wantVerdict: eval.StatusFail,
+		},
+		{
+			name:        "ordinary request, no structured evidence, unverified",
+			template:    llm.Request{Model: testModel("m")},
+			resp:        okResponse("hello", &content.Usage{InputTokens: 1, OutputTokens: 1}),
+			wantKind:    "",
+			wantVerdict: eval.StatusUnverified,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := &fakeClient{resp: tc.resp}
+			tgt := NewTarget(fake, tc.template)
+			sc := eval.Scenario{ID: "s", Name: "c", Revision: "m", Input: content.AgenticMessages{userText("q")}}
+
+			obs, err := tgt.Observe(context.Background(), sc)
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if err := obs.Validate(); err != nil {
+				t.Fatalf("Observation.Validate: %v", err)
+			}
+
+			ev, ok := structuredEvidenceOf(obs)
+			if tc.wantKind == "" {
+				if ok {
+					t.Fatalf("expected no structured evidence, got kind %q", ev.Kind)
+				}
+			} else {
+				if !ok {
+					t.Fatal("expected structured evidence, found none")
+				}
+				if ev.Kind != tc.wantKind {
+					t.Fatalf("structured evidence kind = %q, want %q", ev.Kind, tc.wantKind)
+				}
+				if tc.wantKind == eval.EvidenceStructuredError && ev.StructuredError.Reason != tc.wantReason {
+					t.Fatalf("structured error reason = %q, want %q", ev.StructuredError.Reason, tc.wantReason)
+				}
+				if tc.wantKind == eval.EvidenceStructuredOutput {
+					if ev.StructuredOutput.SchemaName != "score" {
+						t.Errorf("schema name = %q, want score", ev.StructuredOutput.SchemaName)
+					}
+					if ev.StructuredOutput.SchemaRevision != eval.Revision(llm.StructuredOutputRevision) {
+						t.Errorf("schema revision = %q, want %q", ev.StructuredOutput.SchemaRevision, llm.StructuredOutputRevision)
+					}
+				}
+			}
+
+			// End-to-end: SchemaResult reads the emitted evidence and reaches the
+			// expected verdict. This is the regression that proves the loop closed.
+			a, err := exact.SchemaResult().Evaluate(context.Background(), eval.Sample{Observation: obs})
+			if err != nil {
+				t.Fatalf("SchemaResult.Evaluate: %v", err)
+			}
+			if a.Status != tc.wantVerdict {
+				t.Fatalf("SchemaResult verdict = %q, want %q", a.Status, tc.wantVerdict)
+			}
+		})
+	}
+}
+
+// TestObserve_StructuredEvidenceNoSecretLeak asserts the structured evidence
+// carries no raw model output — only the closed reason enum / safe schema
+// identity — even when the model output is sensitive.
+func TestObserve_StructuredEvidenceNoSecretLeak(t *testing.T) {
+	t.Parallel()
+
+	secret := "MODEL-OUTPUT-SECRET-abc123"
+	fake := &fakeClient{resp: &llm.Response{Message: aiText(secret, nil), FinishReason: stream.FinishReasonStop}}
+	tgt := NewTarget(fake, outputTemplate())
+	sc := eval.Scenario{ID: "s", Name: "c", Revision: "m", Input: content.AgenticMessages{userText("q")}}
+
+	obs, err := tgt.Observe(context.Background(), sc)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	ev, ok := structuredEvidenceOf(obs)
+	if !ok {
+		t.Fatal("expected structured evidence")
+	}
+	if strings.Contains(mustJSON(t, ev), secret) {
+		t.Errorf("structured evidence leaked raw model output")
 	}
 }
 

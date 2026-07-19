@@ -233,6 +233,7 @@ const (
 	reportReasonDuplicateSample    = "duplicate sample identity (scenario id and trial index)"
 	reportReasonDuplicateEvaluator = "duplicate evaluator identity within a sample"
 	reportReasonSummaryMismatch    = "summary is inconsistent with the samples"
+	reportReasonProvenanceMismatch = "provenance is inconsistent with the report body"
 )
 
 // SampleSubjectMismatchError reports that a sample's observation described a

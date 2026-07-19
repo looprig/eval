@@ -91,6 +91,36 @@ func TestReportValidate(t *testing.T) {
 			mutate:  func(r *Report) { r.Provenance.Evaluators = []EvaluatorRevision{{Name: "q", Revision: ""}} },
 			wantErr: true,
 		},
+		{
+			name:       "provenance suite contradicts report suite",
+			mutate:     func(r *Report) { r.Provenance.Suite = "other-suite" },
+			wantErr:    true,
+			wantReason: reportReasonProvenanceMismatch,
+		},
+		{
+			name:       "provenance target contradicts report target",
+			mutate:     func(r *Report) { r.Provenance.Target = "other-target" },
+			wantErr:    true,
+			wantReason: reportReasonProvenanceMismatch,
+		},
+		{
+			// A phantom evaluator declared in provenance but never assessed (body is
+			// non-empty) is a contradiction.
+			name: "provenance declares an evaluator absent from the body",
+			mutate: func(r *Report) {
+				r.Provenance.Evaluators = []EvaluatorRevision{{Name: "q", Revision: "v1"}, {Name: "phantom", Revision: "v1"}}
+			},
+			wantErr:    true,
+			wantReason: reportReasonProvenanceMismatch,
+		},
+		{
+			// An assessed evaluator absent from provenance (and provenance carrying a
+			// different identity entirely) is a contradiction in both directions.
+			name:       "provenance evaluator set differs from the assessed set",
+			mutate:     func(r *Report) { r.Provenance.Evaluators = []EvaluatorRevision{{Name: "z", Revision: "v9"}} },
+			wantErr:    true,
+			wantReason: reportReasonProvenanceMismatch,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

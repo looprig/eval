@@ -207,6 +207,43 @@ func TestCompareUnitMismatchForcesChanged(t *testing.T) {
 	}
 }
 
+func TestCompareIntraSideUnitDriftForcesChanged(t *testing.T) {
+	t.Parallel()
+
+	// The baseline reports latency consistently in seconds. The candidate reports
+	// latency across TWO trials with DIFFERENT units — one second, one count —
+	// while the numeric values are equal. The first trial's unit alone must not
+	// stand for the whole side: the drift makes the candidate distribution
+	// internally incomparable, so the case must be CaseChanged (never Unchanged)
+	// and the delta must surface UnitMismatch.
+	latency := func(unit eval.Unit, v float64) eval.Measurement {
+		return eval.Measurement{Name: eval.Name("latency"), Value: v, Unit: unit}
+	}
+	baseline := report(
+		sample("s1", 0, eval.Pass(desc("e", "1"), latency(eval.UnitSecond, 1.0))),
+		sample("s1", 1, eval.Pass(desc("e", "1"), latency(eval.UnitSecond, 1.0))),
+	)
+	candidate := report(
+		sample("s1", 0, eval.Pass(desc("e", "1"), latency(eval.UnitSecond, 1.0))),
+		sample("s1", 1, eval.Pass(desc("e", "1"), latency(eval.UnitCount, 1.0))),
+	)
+
+	cmp, err := compare.Compare(baseline, candidate)
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	cc := findCase(t, cmp, "s1", "e")
+	if cc.Class != compare.CaseChanged {
+		t.Fatalf("class = %q, want %q (intra-side unit drift must not be unchanged)", cc.Class, compare.CaseChanged)
+	}
+	if len(cc.Distributions) != 1 {
+		t.Fatalf("distributions = %d, want 1", len(cc.Distributions))
+	}
+	if !cc.Distributions[0].UnitMismatch {
+		t.Fatalf("delta must surface the intra-side unit drift: %+v", cc.Distributions[0])
+	}
+}
+
 func TestCompareRejectsNonFinite(t *testing.T) {
 	t.Parallel()
 

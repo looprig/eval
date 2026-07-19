@@ -9,6 +9,7 @@ package inference
 // only model identity, counts, and timings.
 
 import (
+	"errors"
 	"time"
 
 	"github.com/looprig/core/content"
@@ -19,10 +20,11 @@ import (
 // Fixed, safe identifiers for the operation and evidence the target emits. They
 // are constants, never derived from model output.
 const (
-	operationID      = "inference"
-	evidenceIDTiming = eval.EvidenceID("inference_timing")
-	evidenceIDUsage  = eval.EvidenceID("inference_usage")
-	timingLabel      = eval.Name("inference")
+	operationID          = "inference"
+	evidenceIDTiming     = eval.EvidenceID("inference_timing")
+	evidenceIDUsage      = eval.EvidenceID("inference_usage")
+	evidenceIDStructured = eval.EvidenceID("inference_structured_output")
+	timingLabel          = eval.Name("inference")
 )
 
 // project assembles the observation from the scenario input, the successful
@@ -33,8 +35,19 @@ func (t *target) project(input content.AgenticMessages, resp *llm.Response, star
 	conv = append(conv, input...)
 	conv = append(conv, resp.Message)
 
-	timing := t.timingEvidence(start, end)
-	usage := t.usageEvidence(resp)
+	evidence := []eval.Evidence{t.timingEvidence(start, end), t.usageEvidence(resp)}
+	refs := []eval.EvidenceRef{
+		{Evidence: evidenceIDTiming},
+		{Evidence: evidenceIDUsage},
+	}
+	// When the request asked for structured output, close the loop: emit a
+	// positive structured-output signal on success or a classified structured
+	// error on failure, so exact.SchemaResult can move off unverified. Only the
+	// closed reason enum and safe schema identity ever reach the evidence.
+	if structured, ok := t.structuredEvidence(resp); ok {
+		evidence = append(evidence, structured)
+		refs = append(refs, eval.EvidenceRef{Evidence: structured.ID})
+	}
 
 	op := eval.Operation{
 		ID:        operationID,
@@ -42,10 +55,7 @@ func (t *target) project(input content.AgenticMessages, resp *llm.Response, star
 		Status:    eval.OperationOK,
 		StartedAt: start,
 		EndedAt:   end,
-		Evidence: []eval.EvidenceRef{
-			{Evidence: evidenceIDTiming},
-			{Evidence: evidenceIDUsage},
-		},
+		Evidence:  refs,
 	}
 
 	return eval.Observation{
@@ -62,9 +72,61 @@ func (t *target) project(input content.AgenticMessages, resp *llm.Response, star
 			EndedAt:    end,
 			Model:      t.revision,
 			Operations: []eval.Operation{op},
-			Evidence:   []eval.Evidence{timing, usage},
+			Evidence:   evidence,
 		},
 	}
+}
+
+// structuredEvidence produces the target's structured-output evidence, or
+// (zero, false) when the request did not ask for structured output. Structured
+// output was requested iff the request template carries an Output schema. On a
+// valid structured response it emits a positive EvidenceStructuredOutput
+// carrying only safe schema identity; on any structured-result failure it emits
+// an EvidenceStructuredError carrying only a closed reason classification. The
+// raw model output and any provider error text never reach the evidence.
+func (t *target) structuredEvidence(resp *llm.Response) (eval.Evidence, bool) {
+	if t.template.Output == nil {
+		return eval.Evidence{}, false
+	}
+	if _, err := llm.StructuredResult(resp); err != nil {
+		return eval.Evidence{
+			ID:              evidenceIDStructured,
+			Kind:            eval.EvidenceStructuredError,
+			StructuredError: &eval.StructuredOutputError{Reason: classifyStructuredError(err)},
+		}, true
+	}
+	return eval.Evidence{
+		ID:   evidenceIDStructured,
+		Kind: eval.EvidenceStructuredOutput,
+		StructuredOutput: &eval.StructuredOutput{
+			SchemaName:     eval.Name(t.template.Output.Name),
+			SchemaRevision: eval.Revision(llm.StructuredOutputRevision),
+		},
+	}, true
+}
+
+// classifyStructuredError maps a typed inference structured-result failure onto
+// eval's closed StructuredErrorReason vocabulary. It is a closed switch that
+// fails secure: an unrecognized inference error or malformed reason becomes a
+// schema mismatch (a failure), never a benign or passing classification. It
+// carries across no bytes of model output or provider text.
+func classifyStructuredError(err error) eval.StructuredErrorReason {
+	var finish *llm.StructuredOutputFinishError
+	if errors.As(err, &finish) {
+		return eval.StructuredErrorEmptyOutput
+	}
+	var malformed *llm.MalformedStructuredOutputError
+	if errors.As(err, &malformed) {
+		switch malformed.ReasonCode {
+		case llm.MalformedReasonMalformedJSON:
+			return eval.StructuredErrorInvalidJSON
+		case llm.MalformedReasonEmpty, llm.MalformedReasonNilResponse, llm.MalformedReasonNilMessage:
+			return eval.StructuredErrorEmptyOutput
+		default:
+			return eval.StructuredErrorSchemaMismatch
+		}
+	}
+	return eval.StructuredErrorSchemaMismatch
 }
 
 // timingEvidence records how long the inference call took as a safe scalar. A

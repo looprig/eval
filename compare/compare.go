@@ -316,9 +316,16 @@ func distributions(base, cand []TrialResult) []MeasurementDelta {
 		if onCand {
 			candUnit = cAcc.unit
 		}
-		// A mismatch is only meaningful when the name is present on both sides with
-		// differing units; a name on only one side has nothing to conflict with.
-		mismatch := onBase && onCand && baseUnit != candUnit
+		// UnitMismatch flags any incomparability of the two distributions:
+		//   - a cross-side disagreement (present on both sides with differing units), or
+		//   - intra-side drift on either side (a side that switched a measurement's
+		//     unit across its own trials, whose values are not internally comparable).
+		// Either makes the raw numbers meaningless to compare, so classify treats the
+		// case as Changed rather than letting equal means read as Unchanged.
+		crossMismatch := onBase && onCand && baseUnit != candUnit
+		baseDrift := onBase && !bAcc.unitConsistent
+		candDrift := onCand && !cAcc.unitConsistent
+		mismatch := crossMismatch || baseDrift || candDrift
 
 		// Unit records the agreed unit for the common compatible case; when the
 		// units differ it falls back to the baseline's (never silently the
@@ -350,13 +357,19 @@ func distributions(base, cand []TrialResult) []MeasurementDelta {
 	return out
 }
 
-// accumulator collects a single measurement's values across trials.
+// accumulator collects a single measurement's values across trials. unit is the
+// representative (first-seen) unit; unitConsistent reports whether every trial's
+// measurement for this name carried that same unit. A side that switches a
+// measurement's unit between trials (for example latency reported in seconds on
+// one trial and as a bare count on another) is not internally comparable, so its
+// values must never be silently summed or averaged across the drift.
 type accumulator struct {
-	unit  eval.Unit
-	count int
-	sum   float64
-	min   float64
-	max   float64
+	unit           eval.Unit
+	unitConsistent bool
+	count          int
+	sum            float64
+	min            float64
+	max            float64
 }
 
 func (a accumulator) distribution() Distribution {
@@ -373,8 +386,14 @@ func aggregate(trials []TrialResult) map[eval.Name]*accumulator {
 		for _, m := range tr.Measurements {
 			acc := out[m.Name]
 			if acc == nil {
-				acc = &accumulator{unit: m.Unit, min: m.Value, max: m.Value}
+				acc = &accumulator{unit: m.Unit, unitConsistent: true, min: m.Value, max: m.Value}
 				out[m.Name] = acc
+			}
+			// Intra-side unit drift: a later trial reports this measurement in a
+			// different unit than the first. Keep the first unit as representative but
+			// record the drift so the distribution is flagged, never silently merged.
+			if m.Unit != acc.unit {
+				acc.unitConsistent = false
 			}
 			acc.count++
 			acc.sum += m.Value

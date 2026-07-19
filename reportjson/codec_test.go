@@ -117,6 +117,13 @@ func TestRoundTrip(t *testing.T) {
 					eval.StatusPass: 1, eval.StatusFail: 1, eval.StatusUnverified: 1,
 					eval.StatusError: 1, eval.StatusSkipped: 1,
 				}
+				r.Provenance.Evaluators = []eval.EvaluatorRevision{
+					{Name: eval.Name("p"), Revision: eval.Revision("1")},
+					{Name: eval.Name("f"), Revision: eval.Revision("1")},
+					{Name: eval.Name("u"), Revision: eval.Revision("1")},
+					{Name: eval.Name("er"), Revision: eval.Revision("1")},
+					{Name: eval.Name("sk"), Revision: eval.Revision("1")},
+				}
 				return r
 			}(),
 		},
@@ -149,6 +156,7 @@ func TestRoundTrip(t *testing.T) {
 					},
 				}
 				r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusFail: 1}
+				r.Provenance.Evaluators = []eval.EvaluatorRevision{{Name: eval.Name("ev"), Revision: eval.Revision("1")}}
 				return r
 			}(),
 		},
@@ -174,6 +182,7 @@ func TestRoundTrip(t *testing.T) {
 					},
 				}
 				r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusPass: 1}
+				r.Provenance.Evaluators = []eval.EvaluatorRevision{{Name: eval.Name("ev"), Revision: eval.Revision("1")}}
 				return r
 			}(),
 		},
@@ -455,6 +464,16 @@ func TestDecodeRejectsInvalidReport(t *testing.T) {
 		{
 			name:   "summary count disagrees with assessments",
 			mutate: func(r *eval.Report) { r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusFail: 1} },
+		},
+		{
+			name:   "provenance suite contradicts report suite",
+			mutate: func(r *eval.Report) { r.Provenance.Suite = eval.Revision("different-suite@9") },
+		},
+		{
+			name: "provenance evaluator set contradicts assessed identities",
+			mutate: func(r *eval.Report) {
+				r.Provenance.Evaluators = []eval.EvaluatorRevision{{Name: eval.Name("phantom"), Revision: eval.Revision("9")}}
+			},
 		},
 	}
 	for _, tt := range tests {

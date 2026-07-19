@@ -97,7 +97,64 @@ func (r Report) Validate() error {
 	if !summaryConsistent(r.Summary, summarize(r.Samples)) {
 		return &ReportValidationError{Reason: reportReasonSummaryMismatch}
 	}
-	return r.Provenance.validate()
+	if err := r.Provenance.validate(); err != nil {
+		return err
+	}
+	return r.validateProvenanceConsistency()
+}
+
+// validateProvenanceConsistency rejects provenance that contradicts the report
+// body. Shape validity (checked by Provenance.validate) is not enough: a
+// well-formed provenance can still describe a different suite, target, or set of
+// evaluators than the report actually recorded, which would silently corrupt any
+// downstream interpretation or comparison. It enforces, using only the values the
+// runner itself emits so a genuine report always passes:
+//
+//   - Provenance.Suite and Provenance.Target equal the report's Suite and Target.
+//     The runner sources both from the same values, including the empty observed
+//     Target of an all-target-failed run, so the equality holds for real reports.
+//   - Every distinct (Evaluator, Revision) identity that appears in an assessment
+//     is declared in Provenance: an assessed evaluator absent from provenance is a
+//     contradiction.
+//   - When at least one evaluator reached the assessment stage, the runner runs
+//     every supplied evaluator on every successful sample, so the declared set must
+//     equal the assessed set — a provenance evaluator absent from a NON-EMPTY body
+//     is a phantom. When the body carries no assessments at all (every sample
+//     failed at the target stage, or no evaluators were supplied) the runner still
+//     records the supplied evaluators in provenance, so that legitimate asymmetry is
+//     allowed rather than rejected.
+//
+// Diagnostics carry only the fixed reason; no data-supplied identity is echoed.
+func (r Report) validateProvenanceConsistency() error {
+	if r.Provenance.Suite != r.Suite || r.Provenance.Target != r.Target {
+		return &ReportValidationError{Reason: reportReasonProvenanceMismatch}
+	}
+
+	provSet := make(map[evaluatorKey]struct{}, len(r.Provenance.Evaluators))
+	for _, e := range r.Provenance.Evaluators {
+		provSet[evaluatorKey{name: e.Name, revision: e.Revision}] = struct{}{}
+	}
+
+	bodySet := make(map[evaluatorKey]struct{})
+	for i := range r.Samples {
+		for _, a := range r.Samples[i].Assessments {
+			bodySet[evaluatorKey{name: a.Evaluator, revision: a.Revision}] = struct{}{}
+		}
+	}
+
+	for k := range bodySet {
+		if _, ok := provSet[k]; !ok {
+			return &ReportValidationError{Reason: reportReasonProvenanceMismatch}
+		}
+	}
+	if len(bodySet) > 0 {
+		for k := range provSet {
+			if _, ok := bodySet[k]; !ok {
+				return &ReportValidationError{Reason: reportReasonProvenanceMismatch}
+			}
+		}
+	}
+	return nil
 }
 
 // validateSamples enforces the per-sample invariants: non-negative trial index,
