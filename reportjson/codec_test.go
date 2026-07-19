@@ -466,6 +466,17 @@ func TestDecodeRejectsInvalidReport(t *testing.T) {
 			mutate: func(r *eval.Report) { r.Summary.Assessments = map[eval.AssessmentStatus]int{eval.StatusFail: 1} },
 		},
 		{
+			// A forged baseline that presents a passing assessment for a sample whose
+			// target errored: the runner never emits this, and the decode boundary must
+			// reject it (a target error skips assessment). Summary.TargetErrors is kept
+			// consistent so the contradiction is the sole failure under test.
+			name: "target error with assessments",
+			mutate: func(r *eval.Report) {
+				r.Samples[0].TargetErr = &eval.TargetError{Cause: errors.New("boom")}
+				r.Summary.TargetErrors = 1
+			},
+		},
+		{
 			name:   "provenance suite contradicts report suite",
 			mutate: func(r *eval.Report) { r.Provenance.Suite = eval.Revision("different-suite@9") },
 		},

@@ -176,6 +176,13 @@ func (r Report) validateSamples() error {
 			return &ReportValidationError{Reason: reportReasonDuplicateSample}
 		}
 		seen[key] = struct{}{}
+		// A target-stage failure skips assessment: the runner never emits a sample
+		// that both errored at the target AND carries assessments. Reject that
+		// contradictory shape at the boundary so a forged report cannot present a
+		// passing assessment for a sample whose target errored.
+		if s.TargetErr != nil && len(s.Assessments) > 0 {
+			return &ReportValidationError{Reason: reportReasonTargetErrorWithAssessments}
+		}
 		if err := validateSampleAssessments(s.Assessments); err != nil {
 			return err
 		}

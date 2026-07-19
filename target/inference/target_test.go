@@ -526,8 +526,26 @@ func structuredToolResponse(objectJSON string) *llm.Response {
 	}
 }
 
-// outputTemplate is a request template that asks for structured output.
+// labelSchemaJSON is a real portable-subset schema requiring exactly one string
+// field "label": {"label": string}, additionalProperties:false.
+func labelSchemaJSON() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"label":{"type":"string"}},"required":["label"],"additionalProperties":false}`)
+}
+
+// outputTemplate is a request template that asks for a schema-constrained
+// structured output. It carries a REAL schema so the target validates the
+// response against it, not merely that the response is well-formed JSON.
 func outputTemplate() llm.Request {
+	return llm.Request{
+		Model:  testModel("m"),
+		Output: &llm.OutputSchema{Name: "score", Schema: labelSchemaJSON(), Strict: true},
+	}
+}
+
+// emptySchemaTemplate asks for structured output but declares NO schema. There is
+// nothing to validate against, so the target emits no positive evidence and
+// SchemaResult stays Unverified.
+func emptySchemaTemplate() llm.Request {
 	return llm.Request{
 		Model:  testModel("m"),
 		Output: &llm.OutputSchema{Name: "score", Strict: true},
@@ -545,11 +563,13 @@ func structuredEvidenceOf(obs eval.Observation) (eval.Evidence, bool) {
 	return eval.Evidence{}, false
 }
 
-// TestObserve_StructuredOutputEvidence proves the closed loop: a structured
-// request emits structured-output evidence, and exact.SchemaResult reads it to
-// reach a definite verdict (Pass on success, Fail on a structured failure). An
-// ordinary (non-structured) request emits no structured evidence, so
-// SchemaResult stays Unverified.
+// TestObserve_StructuredOutputEvidence proves the closed loop: a schema-declaring
+// request validates the response AGAINST the schema for real and emits evidence
+// accordingly, and exact.SchemaResult reads it to reach a definite verdict. A
+// conforming response is Pass; an extraction failure or a genuine schema violation
+// (missing field, extra field, wrong type) is Fail. A request that declares no
+// schema — and an ordinary request with no Output at all — emits no structured
+// evidence, so SchemaResult stays Unverified (unknown is never a pass).
 func TestObserve_StructuredOutputEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -562,14 +582,38 @@ func TestObserve_StructuredOutputEvidence(t *testing.T) {
 		wantVerdict eval.AssessmentStatus
 	}{
 		{
-			name:        "structured request, valid response, pass",
+			name:        "schema declared, conforming response, pass",
 			template:    outputTemplate(),
 			resp:        structuredToolResponse(`{"label":"spam"}`),
 			wantKind:    eval.EvidenceStructuredOutput,
 			wantVerdict: eval.StatusPass,
 		},
 		{
-			name:        "structured request, blocked finish reason, empty-output fail",
+			name:        "schema declared, missing required field, fail",
+			template:    outputTemplate(),
+			resp:        structuredToolResponse(`{}`),
+			wantKind:    eval.EvidenceStructuredError,
+			wantReason:  eval.StructuredErrorMissingField,
+			wantVerdict: eval.StatusFail,
+		},
+		{
+			name:        "schema declared, unknown extra field, fail",
+			template:    outputTemplate(),
+			resp:        structuredToolResponse(`{"label":"spam","extra":1}`),
+			wantKind:    eval.EvidenceStructuredError,
+			wantReason:  eval.StructuredErrorSchemaMismatch,
+			wantVerdict: eval.StatusFail,
+		},
+		{
+			name:        "schema declared, wrong field type, fail",
+			template:    outputTemplate(),
+			resp:        structuredToolResponse(`{"label":123}`),
+			wantKind:    eval.EvidenceStructuredError,
+			wantReason:  eval.StructuredErrorSchemaMismatch,
+			wantVerdict: eval.StatusFail,
+		},
+		{
+			name:        "schema declared, blocked finish reason, empty-output fail",
 			template:    outputTemplate(),
 			resp:        &llm.Response{Message: aiText("truncated", nil), FinishReason: stream.FinishReasonLength},
 			wantKind:    eval.EvidenceStructuredError,
@@ -577,12 +621,19 @@ func TestObserve_StructuredOutputEvidence(t *testing.T) {
 			wantVerdict: eval.StatusFail,
 		},
 		{
-			name:        "structured request, malformed json text, invalid-json fail",
+			name:        "schema declared, malformed json text, invalid-json fail",
 			template:    outputTemplate(),
 			resp:        &llm.Response{Message: aiText("not json at all", nil), FinishReason: stream.FinishReasonStop},
 			wantKind:    eval.EvidenceStructuredError,
 			wantReason:  eval.StructuredErrorInvalidJSON,
 			wantVerdict: eval.StatusFail,
+		},
+		{
+			name:        "output requested but no schema declared, unverified",
+			template:    emptySchemaTemplate(),
+			resp:        structuredToolResponse(`{"label":"spam"}`),
+			wantKind:    "",
+			wantVerdict: eval.StatusUnverified,
 		},
 		{
 			name:        "ordinary request, no structured evidence, unverified",
@@ -669,6 +720,45 @@ func TestObserve_StructuredEvidenceNoSecretLeak(t *testing.T) {
 	}
 	if strings.Contains(mustJSON(t, ev), secret) {
 		t.Errorf("structured evidence leaked raw model output")
+	}
+}
+
+// TestClassifyStructuredError asserts the mapping from a typed inference
+// structured-result failure onto eval's closed reason vocabulary. Every branch
+// must land on a failure reason (fail-secure); an unknown error type must too.
+func TestClassifyStructuredError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want eval.StructuredErrorReason
+	}{
+		{"finish error is empty output", &llm.StructuredOutputFinishError{Reason: stream.FinishReasonLength}, eval.StructuredErrorEmptyOutput},
+		{"malformed json is invalid json", &llm.MalformedStructuredOutputError{ReasonCode: llm.MalformedReasonMalformedJSON}, eval.StructuredErrorInvalidJSON},
+		{"root not object is invalid json", &llm.MalformedStructuredOutputError{ReasonCode: llm.MalformedReasonRootNotObject}, eval.StructuredErrorInvalidJSON},
+		{"empty is empty output", &llm.MalformedStructuredOutputError{ReasonCode: llm.MalformedReasonEmpty}, eval.StructuredErrorEmptyOutput},
+		{"nil response is empty output", &llm.MalformedStructuredOutputError{ReasonCode: llm.MalformedReasonNilResponse}, eval.StructuredErrorEmptyOutput},
+		{"nil message is empty output", &llm.MalformedStructuredOutputError{ReasonCode: llm.MalformedReasonNilMessage}, eval.StructuredErrorEmptyOutput},
+		{"ambiguous is schema mismatch", &llm.MalformedStructuredOutputError{ReasonCode: llm.MalformedReasonAmbiguous}, eval.StructuredErrorSchemaMismatch},
+		{"invalid block is schema mismatch", &llm.MalformedStructuredOutputError{ReasonCode: llm.MalformedReasonInvalidBlock}, eval.StructuredErrorSchemaMismatch},
+		{"unknown error type is schema mismatch", errors.New("some other failure"), eval.StructuredErrorSchemaMismatch},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := classifyStructuredError(tc.err)
+			if got != tc.want {
+				t.Fatalf("classifyStructuredError = %q, want %q", got, tc.want)
+			}
+			// Every mapping must be a valid closed-enum member (never absence).
+			if err := got.Validate(); err != nil {
+				t.Fatalf("mapped reason %q is not a valid StructuredErrorReason: %v", got, err)
+			}
+		})
 	}
 }
 

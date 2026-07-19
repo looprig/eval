@@ -9,6 +9,7 @@ package inference
 // only model identity, counts, and timings.
 
 import (
+	"bytes"
 	"errors"
 	"time"
 
@@ -78,22 +79,29 @@ func (t *target) project(input content.AgenticMessages, resp *llm.Response, star
 }
 
 // structuredEvidence produces the target's structured-output evidence, or
-// (zero, false) when the request did not ask for structured output. Structured
-// output was requested iff the request template carries an Output schema. On a
-// valid structured response it emits a positive EvidenceStructuredOutput
-// carrying only safe schema identity; on any structured-result failure it emits
-// an EvidenceStructuredError carrying only a closed reason classification. The
-// raw model output and any provider error text never reach the evidence.
+// (zero, false) when the request did not ask for a schema-constrained structured
+// output. A schema was requested iff the request template carries an Output with a
+// non-empty Schema; without a declared schema there is nothing to validate
+// against, so no positive signal is emitted and SchemaResult stays Unverified
+// (the fail-secure "unknown is not a pass" behavior).
+//
+// With a declared schema, the response is first extracted by StructuredResult
+// (which only guarantees well-formed JSON) and then validated against the schema
+// FOR REAL by conformsToSchema. Only a document that both extracts cleanly AND
+// conforms yields a positive EvidenceStructuredOutput; an extraction failure or a
+// schema violation yields an EvidenceStructuredError carrying a closed reason
+// classification. The raw model output and any provider error text never reach
+// the evidence — only the closed reason enum and safe schema identity do.
 func (t *target) structuredEvidence(resp *llm.Response) (eval.Evidence, bool) {
-	if t.template.Output == nil {
+	if t.template.Output == nil || len(bytes.TrimSpace(t.template.Output.Schema)) == 0 {
 		return eval.Evidence{}, false
 	}
-	if _, err := llm.StructuredResult(resp); err != nil {
-		return eval.Evidence{
-			ID:              evidenceIDStructured,
-			Kind:            eval.EvidenceStructuredError,
-			StructuredError: &eval.StructuredOutputError{Reason: classifyStructuredError(err)},
-		}, true
+	raw, err := llm.StructuredResult(resp)
+	if err != nil {
+		return structuredErrorEvidence(classifyStructuredError(err)), true
+	}
+	if ok, reason := conformsToSchema(t.template.Output.Schema, raw); !ok {
+		return structuredErrorEvidence(reason), true
 	}
 	return eval.Evidence{
 		ID:   evidenceIDStructured,
@@ -103,6 +111,17 @@ func (t *target) structuredEvidence(resp *llm.Response) (eval.Evidence, bool) {
 			SchemaRevision: eval.Revision(llm.StructuredOutputRevision),
 		},
 	}, true
+}
+
+// structuredErrorEvidence builds the failure evidence for a structured-output
+// extraction or schema-conformance failure. It carries only the closed reason
+// classification — never a byte of model output.
+func structuredErrorEvidence(reason eval.StructuredErrorReason) eval.Evidence {
+	return eval.Evidence{
+		ID:              evidenceIDStructured,
+		Kind:            eval.EvidenceStructuredError,
+		StructuredError: &eval.StructuredOutputError{Reason: reason},
+	}
 }
 
 // classifyStructuredError maps a typed inference structured-result failure onto
@@ -118,14 +137,21 @@ func classifyStructuredError(err error) eval.StructuredErrorReason {
 	var malformed *llm.MalformedStructuredOutputError
 	if errors.As(err, &malformed) {
 		switch malformed.ReasonCode {
-		case llm.MalformedReasonMalformedJSON:
+		case llm.MalformedReasonMalformedJSON, llm.MalformedReasonRootNotObject:
+			// A not-JSON or root-not-object body is an invalid-JSON representation.
+			// This matches the judge's classifyExtractionError, which maps
+			// RootNotObject to InvalidJSON.
 			return eval.StructuredErrorInvalidJSON
 		case llm.MalformedReasonEmpty, llm.MalformedReasonNilResponse, llm.MalformedReasonNilMessage:
 			return eval.StructuredErrorEmptyOutput
 		default:
+			// Any other malformed representation (ambiguous, invalid block, wrong
+			// role, too large, ...) is a shape failure. Fail secure.
 			return eval.StructuredErrorSchemaMismatch
 		}
 	}
+	// An unrecognized structured-result error must still map to a failure reason,
+	// never absence of error.
 	return eval.StructuredErrorSchemaMismatch
 }
 

@@ -234,6 +234,8 @@ const (
 	reportReasonDuplicateEvaluator = "duplicate evaluator identity within a sample"
 	reportReasonSummaryMismatch    = "summary is inconsistent with the samples"
 	reportReasonProvenanceMismatch = "provenance is inconsistent with the report body"
+
+	reportReasonTargetErrorWithAssessments = "sample with a target error must not carry assessments"
 )
 
 // SampleSubjectMismatchError reports that a sample's observation described a

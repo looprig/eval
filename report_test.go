@@ -70,6 +70,17 @@ func TestReportValidate(t *testing.T) {
 			wantReason: reportReasonDuplicateEvaluator,
 		},
 		{
+			// A sample that both errored at the target stage AND carries assessments
+			// is contradictory (a target error skips assessment) and must be rejected
+			// at the boundary. validateSamples fires before the summary check.
+			name: "target error with assessments",
+			mutate: func(r *Report) {
+				r.Samples[0].TargetErr = &TargetError{Cause: errors.New("boom")}
+			},
+			wantErr:    true,
+			wantReason: reportReasonTargetErrorWithAssessments,
+		},
+		{
 			name:       "summary sample count mismatch",
 			mutate:     func(r *Report) { r.Summary.Samples = 99 },
 			wantErr:    true,
