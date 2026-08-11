@@ -10,7 +10,7 @@ tool (
 
 require (
 	github.com/looprig/core v0.5.1
-	github.com/looprig/inference v0.9.1
+	github.com/looprig/inference v0.9.2
 )
 
 require (
