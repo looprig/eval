@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "repository": "eval",
+  "proofSources": [
+    {
+      "id": "example-eval-exact-gate-fixture",
+      "type": "executable-fixture",
+      "path": "examples/exact/example_test.go",
+      "symbol": "Example_runExactGate"
+    },
+    {
+      "id": "example-eval-judge-gate-fixture",
+      "type": "executable-fixture",
+      "path": "examples/judge/example_test.go",
+      "symbol": "Example_runScriptedJudge"
+    },
+    {
+      "id": "example-eval-report-sink-fixture",
+      "type": "executable-fixture",
+      "path": "examples/report/example_test.go",
+      "symbol": "Example_writeReport"
+    },
+    {
+      "id": "example-eval-manifest-contract-test",
+      "type": "test",
+      "path": "tests/docs_examples_test.go",
+      "symbol": "TestDocsExamplesArtifacts"
+    },
+    {
+      "id": "example-eval-run-source",
+      "type": "source",
+      "path": "run.go",
+      "symbol": "Run"
+    },
+    {
+      "id": "example-eval-required-text-source",
+      "type": "source",
+      "path": "exact/text.go",
+      "symbol": "RequiredText"
+    },
+    {
+      "id": "example-eval-forbidden-text-source",
+      "type": "source",
+      "path": "exact/text.go",
+      "symbol": "ForbiddenText"
+    },
+    {
+      "id": "example-eval-judge-new-source",
+      "type": "source",
+      "path": "judge/judge.go",
+      "symbol": "New"
+    },
+    {
+      "id": "example-eval-file-sink-source",
+      "type": "source",
+      "path": "reportjson/sink.go",
+      "symbol": "NewFileSink"
+    },
+    {
+      "id": "example-eval-report-decode-source",
+      "type": "source",
+      "path": "reportjson/codec.go",
+      "symbol": "Decode"
+    }
+  ],
+  "examples": [
+    {
+      "id": "example-eval-exact-gate-example",
+      "ecosystem": "go",
+      "owner": "eval",
+      "sourcePath": "examples/exact/example_test.go",
+      "availability": "source-workspace",
+      "versions": {
+        "github.com/looprig/eval": "source-workspace"
+      },
+      "offlineCommand": "GOWORK=off GOCACHE=/tmp/looprig-eval-docs-gocache go test ./examples/...",
+      "assertion": "Executable output proves a deterministic target can be gated by exact required and forbidden text evaluators.",
+      "workflowPath": ".github/workflows/docs-examples.yml",
+      "jobId": "docs-examples",
+      "cleanup": "No cleanup required; the target and evaluators use in-memory values only.",
+      "liveGate": null,
+      "proofIds": [
+        "example-eval-exact-gate-fixture",
+        "example-eval-manifest-contract-test",
+        "example-eval-run-source",
+        "example-eval-required-text-source",
+        "example-eval-forbidden-text-source"
+      ]
+    },
+    {
+      "id": "example-eval-scripted-judge-example",
+      "ecosystem": "go",
+      "owner": "eval",
+      "sourcePath": "examples/judge/example_test.go",
+      "availability": "source-workspace",
+      "versions": {
+        "github.com/looprig/eval": "source-workspace",
+        "github.com/looprig/inference": "source-workspace"
+      },
+      "offlineCommand": "GOWORK=off GOCACHE=/tmp/looprig-eval-docs-gocache go test ./examples/...",
+      "assertion": "Executable output proves the judge requests strict structured output and turns a locally scripted score into a pass verdict without provider access.",
+      "workflowPath": ".github/workflows/docs-examples.yml",
+      "jobId": "docs-examples",
+      "cleanup": "No cleanup required; the scripted inference client performs no network or filesystem operations.",
+      "liveGate": null,
+      "proofIds": [
+        "example-eval-judge-gate-fixture",
+        "example-eval-manifest-contract-test",
+        "example-eval-judge-new-source"
+      ]
+    },
+    {
+      "id": "example-eval-report-output-example",
+      "ecosystem": "go",
+      "owner": "eval",
+      "sourcePath": "examples/report/example_test.go",
+      "availability": "source-workspace",
+      "versions": {
+        "github.com/looprig/eval": "source-workspace"
+      },
+      "offlineCommand": "GOWORK=off GOCACHE=/tmp/looprig-eval-docs-gocache go test ./examples/...",
+      "assertion": "Executable output proves a genuine run can be written through the atomic JSON sink and decoded with its summary intact.",
+      "workflowPath": ".github/workflows/docs-examples.yml",
+      "jobId": "docs-examples",
+      "cleanup": "The example removes its temporary report directory before exit.",
+      "liveGate": null,
+      "proofIds": [
+        "example-eval-report-sink-fixture",
+        "example-eval-manifest-contract-test",
+        "example-eval-run-source",
+        "example-eval-file-sink-source",
+        "example-eval-report-decode-source"
+      ]
+    }
+  ]
+}
