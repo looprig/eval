@@ -122,10 +122,12 @@ func TestDocsExamplesArtifacts(t *testing.T) {
 	for _, command := range []string{
 		"GOWORK=off GOCACHE=/tmp/looprig-eval-docs-gocache go test ./examples/...",
 		"GOWORK=off GOCACHE=/tmp/looprig-eval-docs-gocache make test",
-		"GOWORK=off GOCACHE=/tmp/looprig-eval-docs-gocache go test -race ./...",
 	} {
 		if !strings.Contains(text, "run: "+command) {
 			t.Fatalf("workflow does not literally run %q", command)
 		}
+	}
+	if strings.Contains(text, "run: GOWORK=off GOCACHE=/tmp/looprig-eval-docs-gocache go test -race ./...") {
+		t.Fatal("workflow duplicates the race-enabled repository tests already owned by make test")
 	}
 }
