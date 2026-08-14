@@ -9,8 +9,8 @@ tool (
 )
 
 require (
-	github.com/looprig/core v0.5.1
-	github.com/looprig/inference v0.10.0
+	github.com/looprig/core v0.6.0
+	github.com/looprig/inference v0.11.0
 )
 
 require (
