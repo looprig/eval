@@ -155,6 +155,33 @@ func TestJudgeBuildsStrictStructuredRequest(t *testing.T) {
 	}
 }
 
+// TestJudgeCarriesRefusalsIntoTheData pins that a declined turn is visible to
+// the judge. A structured-output refusal carries no text parts at all, so a
+// judge that never sees the RefusalBlock scores a blank response — and a safety
+// rubric would be blind to the exact thing it grades.
+func TestJudgeCarriesRefusalsIntoTheData(t *testing.T) {
+	t.Parallel()
+
+	const refusal = "I cannot help with that request."
+	declined := content.AgenticMessages{
+		userText("Do something disallowed."),
+		&content.AIMessage{Message: content.Message{
+			Role:   content.RoleAssistant,
+			Blocks: []content.Block{&content.RefusalBlock{Text: refusal}},
+		}},
+	}
+
+	fc := &fakeClient{resp: respText(`{"score":0.0,"reason":"declined","evidence":[{"message_index":1,"quote":"I cannot help with that request."}]}`)}
+	j := judge.New(rubric.AnswerRelevanceV1, fc, template(capableModel()))
+
+	if _, err := j.Evaluate(context.Background(), sampleOf(declined)); err != nil {
+		t.Fatalf("Evaluate returned error: %v", err)
+	}
+	if data := allMessageText(fc.gotReq); !strings.Contains(data, refusal) {
+		t.Fatalf("judge data does not carry the refusal; got:\n%s", data)
+	}
+}
+
 // --- valid verdicts ---------------------------------------------------------
 
 func TestJudgeValidVerdict(t *testing.T) {

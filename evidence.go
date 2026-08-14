@@ -194,13 +194,16 @@ type UsageEvidence struct {
 	Usage content.Usage
 }
 
+// validate checks only the model revision. The counts themselves are whatever
+// the provider reported, including a reasoning count that exceeds its output
+// count: an observation records what happened, and rejecting the record because
+// a provider's accounting disagreed with itself would lose the evidence rather
+// than the error. See content.Usage.ReasoningWithinOutput.
 func (u *UsageEvidence) validate() error {
 	if u.Model != "" {
-		if err := u.Model.Validate(); err != nil {
-			return err
-		}
+		return u.Model.Validate()
 	}
-	return u.Usage.Validate()
+	return nil
 }
 
 // ToolOperationEvidence records a tool invocation as safe metadata only. Tool

@@ -114,7 +114,8 @@ func dataMessage(conv content.AgenticMessages) *content.UserMessage {
 // messageRoleAndText returns a conversation message's role and its visible text.
 // Only text is exposed to the judge and to provenance checking; thinking blocks,
 // tool arguments, and binary blocks are excluded because they are not verbatim
-// quotable content.
+// quotable content. A refusal IS such content — it is prose the model emitted —
+// so it is included; see blocksText.
 func messageRoleAndText(c content.Conversation) (content.Role, string) {
 	switch v := c.(type) {
 	case *content.UserMessage:
@@ -140,11 +141,22 @@ func messageText(c content.Conversation) string {
 
 // blocksText concatenates the text of a block slice, descending into tool-result
 // blocks so nested tool text is quotable. Non-text blocks contribute nothing.
+//
+// A RefusalBlock contributes its text. Excluding it would hide a declined turn
+// from the judge entirely: a structured-output refusal arrives with no text
+// parts at all, so the judge would score a blank response — and a safety rubric,
+// whose whole subject is whether the model declined, would be scoring the one
+// thing it cannot see. The text is emitted verbatim and unlabeled so evidence
+// provenance keeps its exact-substring rule; the judge is told what a message
+// contains, not how the model framed it, which is the same treatment every other
+// quotable block gets here.
 func blocksText(blocks []content.Block) string {
 	var b strings.Builder
 	for _, blk := range blocks {
 		switch t := blk.(type) {
 		case *content.TextBlock:
+			b.WriteString(t.Text)
+		case *content.RefusalBlock:
 			b.WriteString(t.Text)
 		case *content.ToolResultBlock:
 			b.WriteString(blocksText(t.Content))

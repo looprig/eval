@@ -261,7 +261,6 @@ func isBareError(err error) bool {
 		dm  *DuplicateMeasurementError
 		dfe *DuplicateFindingError
 		sce *StatusConsistencyError
-		uve *content.UsageValidationError
 	)
 	switch {
 	case errors.As(err, &ve),
@@ -273,8 +272,7 @@ func isBareError(err error) bool {
 		errors.As(err, &dk),
 		errors.As(err, &dm),
 		errors.As(err, &dfe),
-		errors.As(err, &sce),
-		errors.As(err, &uve):
+		errors.As(err, &sce):
 		return false
 	default:
 		return true

@@ -38,7 +38,12 @@ import (
 // evaluatorRevision is the shared revision of the Phase-1 exact evaluators. A
 // behavioral change to any evaluator must bump this so reports can distinguish
 // verdicts produced by different logic.
-const evaluatorRevision eval.Revision = "v1"
+//
+// v2: the text evaluators' assistant projection now includes
+// *content.RefusalBlock, so a decline delivered on a provider's refusal channel
+// is matchable. A v1 pass on a refusal-control rubric is not comparable to a v2
+// one — see assistantBlockText.
+const evaluatorRevision eval.Revision = "v2"
 
 // codeConfigError is the finding code attached to the Errored assessment a
 // misconfigured (vacuously constructed) evaluator produces.
@@ -76,12 +81,48 @@ func diagnosticEvidence(id eval.EvidenceID, code eval.Name, msg string) eval.Evi
 	}
 }
 
+// assistantBlockText reports the text a single assistant block contributes to
+// the text evaluators' projection, and whether it contributes at all. It is the
+// one place the contributing block kinds are decided, so the whole-conversation
+// flatten and the per-message projection cannot drift apart.
+//
+// A *content.RefusalBlock contributes its text, unmarked and byte-identical to
+// ordinary prose. A decline that arrives on a provider's dedicated refusal
+// channel (OpenAI's `refusal`) is still the assistant's visible answer, and a
+// projection blind to it makes a refusal-control rubric — whose entire subject
+// is whether the model declined — score the one thing it cannot see:
+// ForbiddenText("can't help") would pass on the over-refusal it exists to catch,
+// and RequiredText("can't help") would report an under-refusal that did not
+// happen. This matches the sibling judge projection (eval/judge, blocksText).
+//
+// It is unmarked deliberately. These evaluators are substring matchers over
+// assistant output; any injected label (a "[refusal] " prefix, say) becomes
+// matchable text, so a forbidden or required substring could hit a marker the
+// model never produced, and a caller could no longer state which bytes the
+// evaluator searched. Callers that must tell a decline apart from prose need the
+// block kind, not a sentinel inside a flattened string — that is a separate
+// typed evaluator over *content.RefusalBlock, not a change to this projection.
+//
+// Thinking blocks, tool-use blocks, and any block nested inside a tool result
+// contribute nothing: they are not the assistant's answer.
+func assistantBlockText(blk content.Block) (string, bool) {
+	switch t := blk.(type) {
+	case *content.TextBlock:
+		return t.Text, true
+	case *content.RefusalBlock:
+		return t.Text, true
+	default:
+		return "", false
+	}
+}
+
 // flattenAssistantText is the text evaluators' private projection: it joins the
-// text blocks of every assistant message into one string, separating blocks with
-// a newline. It is deliberately unexported and its result never leaves the
-// package. Only *content.AIMessage *content.TextBlock content contributes — user,
-// system, and tool-result text (including blocks nested inside a tool result),
-// and assistant thinking blocks, are not assistant output and are excluded.
+// contributing blocks (see assistantBlockText) of every assistant message into
+// one string, separating blocks with a newline. It is deliberately unexported
+// and its result never leaves the package. Only *content.AIMessage content
+// contributes — user, system, and tool-result text (including blocks nested
+// inside a tool result), and assistant thinking blocks, are not assistant output
+// and are excluded.
 func flattenAssistantText(conv content.AgenticMessages) string {
 	var b strings.Builder
 	first := true
@@ -91,34 +132,35 @@ func flattenAssistantText(conv content.AgenticMessages) string {
 			continue
 		}
 		for _, blk := range ai.Blocks {
-			tb, ok := blk.(*content.TextBlock)
+			text, ok := assistantBlockText(blk)
 			if !ok {
 				continue
 			}
 			if !first {
 				b.WriteByte('\n')
 			}
-			b.WriteString(tb.Text)
+			b.WriteString(text)
 			first = false
 		}
 	}
 	return b.String()
 }
 
-// assistantMessageText joins one assistant message's text blocks with a newline.
-// It is used to locate the specific message a forbidden substring appears in.
+// assistantMessageText joins one assistant message's contributing blocks with a
+// newline. It is used to locate the specific message a forbidden substring
+// appears in.
 func assistantMessageText(ai *content.AIMessage) string {
 	var b strings.Builder
 	first := true
 	for _, blk := range ai.Blocks {
-		tb, ok := blk.(*content.TextBlock)
+		text, ok := assistantBlockText(blk)
 		if !ok {
 			continue
 		}
 		if !first {
 			b.WriteByte('\n')
 		}
-		b.WriteString(tb.Text)
+		b.WriteString(text)
 		first = false
 	}
 	return b.String()
