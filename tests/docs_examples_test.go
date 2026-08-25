@@ -121,7 +121,7 @@ func TestDocsExamplesArtifacts(t *testing.T) {
 	text := string(workflow)
 	for _, command := range []string{
 		"GOWORK=off GOCACHE=/tmp/looprig-eval-docs-gocache go test ./examples/...",
-		"GOWORK=off GOCACHE=/tmp/looprig-eval-docs-gocache make test",
+		"GOWORK=off GOCACHE=/tmp/looprig-eval-docs-gocache make check",
 	} {
 		if !strings.Contains(text, "run: "+command) {
 			t.Fatalf("workflow does not literally run %q", command)
