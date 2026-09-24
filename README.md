@@ -17,6 +17,35 @@ the `github.com/looprig/inference` dependency; nothing else does (no Harness,
 sandbox, OpenTelemetry, or provider SDK reaches a consumer's build graph through
 eval).
 
+## Status
+
+Released. The root package (suites, scenarios, targets, evaluators,
+assessments, the `eval.Run` engine and `eval.Report`), deterministic
+evaluators (`exact`), the structured model judge (`judge`) with versioned
+rubrics (`rubric`), the active-inference target (`target/inference`), the
+JSONL scenario codec (`dataset`), the redacted report codec and file sink
+(`reportjson`), baseline comparison (`compare`) and the `go test` integration
+(`evaltest`) are implemented. No Harness adapter ships in this module.
+
+Install:
+
+```sh
+go get github.com/looprig/eval@latest
+```
+
+| Package | Purpose |
+|---|---|
+| `github.com/looprig/eval` | Core vocabulary and engine: `Suite`, `Scenario`, `Target`, `Evaluator`, `Assessment`, `Report`, `Sink`, `Run`. |
+| `evaltest` | Runs a suite under `go test` as subtests and gates the report. |
+| `exact` | Deterministic evaluators over text, tool calls, structured output, tool-error rate and latency. |
+| `judge` | Structured-output model judge over an injected `inference.Client`. |
+| `rubric` | Versioned rubric definitions and `rubric.Catalog()`. |
+| `target/inference` | `eval.Target` that drives a scenario through an `inference.Client`. |
+| `dataset` | Versioned, bounded JSONL codec for scenarios. |
+| `reportjson` | Versioned, redacted `report/v1` JSON codec and `FileSink`. |
+| `compare` | Per-case baseline-versus-candidate comparison. |
+| `examples/*` | Runnable `Example` tests for `exact`, `judge` and `report`. |
+
 ## What eval does not do (non-goals)
 
 These are contracts, not omissions:
@@ -29,10 +58,10 @@ These are contracts, not omissions:
   unavailable judge, an unsupported sandbox guarantee, or a model that cannot
   satisfy the declared schema yields `unverified` or `error` — never an inferred
   passing score.
-- **Eval output never touches the Harness journal.** The optional read-only
-  Harness adapter snapshots the public conversation at a turn/session boundary
-  and queues evaluation *outside* the active loop; it does not write the journal
-  or change the active conversation.
+- **Eval output never touches the Harness journal.** Eval does not depend on
+  Harness; evaluating a live session means snapshotting its public conversation
+  at a turn/session boundary and evaluating it *outside* the active loop, never
+  writing the journal or changing the active conversation.
 - Eval does not own alert thresholds or delivery, and does not select an
   OpenTelemetry SDK, exporter, or backend. Reports are data; a downstream system
   decides whether a measurement warrants an alert.
@@ -148,7 +177,8 @@ from the default `go test ./...`:
 
 - Tag live/model-backed cases `//go:build integration` (or `qualification`) and
   run them explicitly: `go test -tags integration -race ./...`. Integration
-  tests live in `*_integration_test.go`.
+  tests live in `*_integration_test.go` (this module's own is
+  `target/inference/target_integration_test.go`).
 - Unit tests never touch the network. Datasets can be embedded with `//go:embed`.
 
 Because a live judge or target is nondeterministic, do **not** let Go's test
@@ -196,13 +226,15 @@ valid when both reports declare compatible case and evaluator identities.
 
 ## Building and verifying
 
-Every command runs with `GOWORK=off` so the module resolves through its own
-`require`/`replace` graph (a parent `go.work` must not capture it):
+The Go baseline is 1.26.8. Every command runs with `GOWORK=off` so the module
+resolves through its own pinned `require` graph (a parent `go.work` must not
+capture it):
 
 ```sh
 GOWORK=off go test -race ./...                 # unit tests, always -race
 CGO_ENABLED=0 GOWORK=off go build -trimpath ./...
 GOWORK=off make secure                         # fmt-check + vet + staticcheck + gosec + mod verify + govulncheck
+make check                                     # the CI surface: fmt-check, vet, staticcheck, gosec, govulncheck, race tests, build
 ```
 
 The security linters (`staticcheck`, `gosec`, `govulncheck`) are wired as Go
@@ -210,3 +242,12 @@ tool dependencies in `go.mod` and are dev/tool-only — they are not linked into
 the library. The library's only runtime dependencies are `github.com/looprig/core`
 (root) and `github.com/looprig/inference` (`judge/` and `target/inference/`
 only).
+
+## Where it sits
+
+Tier 3 of the Looprig workspace: `eval -> core, inference`. `pluto` builds on
+it.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
